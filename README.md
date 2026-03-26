@@ -74,6 +74,16 @@ The repo includes checked-in planar fixtures, including a through-hole tube, and
 outputs under `tests/golden/`. It also includes a more complex bridge example under
 `examples/complex/bridge.stl` as a smoke regression for localized shell healing.
 
+Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
+with upstream STL and 3MF models. Those smoke tests intentionally include both current
+`solid_created` cases and known-hard `shell_only` cases so robustness work can expand coverage
+without weakening the simpler baseline.
+
+`examples/benchmark/` adds a broader public corpus with both current-success and current-hard
+cases from the 3MF Consortium, CloudGripper Robot, and BCN3D Moveo repositories. Those smoke
+tests lock in expected outcomes while we expand robustness without regressing the simpler
+fixtures.
+
 Refresh the golden baseline with:
 
 ```bash

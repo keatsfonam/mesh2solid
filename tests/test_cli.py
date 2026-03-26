@@ -25,6 +25,49 @@ GOLDEN_CASES = {
     },
 }
 
+BENCHMARK_CASES = {
+    "3mf_core_box": {
+        "path": EXAMPLES_DIR / "benchmark" / "3mf_samples" / "core_box.3mf",
+        "expected_outcome": "solid_created",
+        "min_regions": 6,
+    },
+    "3mf_core_cylinder": {
+        "path": EXAMPLES_DIR / "benchmark" / "3mf_samples" / "core_cylinder.3mf",
+        "expected_outcome": "solid_created",
+        "min_regions": 3,
+    },
+    "3mf_core_multiple_cylinders": {
+        "path": EXAMPLES_DIR / "benchmark" / "3mf_samples" / "core_multiple_cylinders.3mf",
+        "expected_outcome": "solid_created",
+        "min_regions": 6,
+    },
+    "cloudgripper_xy_rail_mount": {
+        "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "xy_rail_mount.stl",
+        "expected_outcome": "solid_created",
+        "min_regions": 6,
+    },
+    "cloudgripper_arm_holder": {
+        "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "arm_holder.stl",
+        "expected_outcome": "solid_created",
+        "min_regions": 2,
+    },
+    "cloudgripper_xy_nema_bracket": {
+        "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "xy_nema_bracket.stl",
+        "expected_outcome": "shell_only",
+        "min_regions": 25,
+    },
+    "cloudgripper_arm_linear_pinion_gear": {
+        "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "arm_linear_pinion_gear.stl",
+        "expected_outcome": "shell_only",
+        "min_regions": 25,
+    },
+    "bcn3d_moveo_t4m1e": {
+        "path": EXAMPLES_DIR / "benchmark" / "bcn3d_moveo" / "t4m1e.stl",
+        "expected_outcome": "shell_only",
+        "min_regions": 25,
+    },
+}
+
 
 def cube_mesh(size=10.0):
     vertices = [
@@ -399,6 +442,35 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
             self.assertTrue((out_dir / "reconstruction.step").exists())
             self.assertEqual(report["reconstruction"]["shell_gap_score"], 0.0)
+
+    def test_public_benchmark_corpus_matches_expected_outcomes(self):
+        for case_name, case in BENCHMARK_CASES.items():
+            with self.subTest(case=case_name):
+                mesh_path = case["path"]
+                self.assertTrue(mesh_path.exists(), f"Missing benchmark fixture: {mesh_path}")
+
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = pathlib.Path(tmp)
+                    out_dir = tmp_path / "out"
+
+                    _, report, regions, constraints = run_cli(mesh_path, out_dir)
+
+                    self.assertEqual(report["reconstruction"]["outcome"], case["expected_outcome"])
+                    self.assertGreaterEqual(report["regions"]["count"], case["min_regions"])
+                    self.assertGreaterEqual(len(regions["regions"]), case["min_regions"])
+                    self.assertIn("constraints", constraints)
+
+                    if case["expected_outcome"] == "solid_created":
+                        self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+                        self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+                        self.assertTrue((out_dir / "reconstruction.step").exists())
+                    else:
+                        self.assertFalse((out_dir / "reconstruction.step").exists())
+                        self.assertTrue(report["reconstruction"]["failure_reasons"])
+                        self.assertTrue(
+                            report["reconstruction"]["open_edge_count"] > 0
+                            or report["reconstruction"]["non_manifold_edge_count"] > 0
+                        )
 
 
 if __name__ == "__main__":
