@@ -45,6 +45,18 @@ Build the image and run the full-stack test suite:
 make docker-test
 ```
 
+Run the broader checked-in benchmark corpus against the host build:
+
+```bash
+make hard-bench
+```
+
+Run that same corpus against the Docker full-stack build:
+
+```bash
+make docker-hard-bench
+```
+
 Open a shell inside the container:
 
 ```bash
@@ -52,6 +64,8 @@ make docker-shell
 ```
 
 The Docker workflow uses the `docker-full` CMake preset from `CMakePresets.json`.
+Those targets intentionally clear `build-cmake/docker-full` first so a stale Linux build tree
+does not get mixed with host-side artifacts.
 
 For a lightweight host-only fallback build:
 
@@ -128,6 +142,12 @@ When using a non-default binary, both test helpers honor:
 ```bash
 MESH2SOLID_BIN=/path/to/mesh2solid
 MESH2SOLID_SKIP_BUILD=1
+```
+
+The manual benchmark runner uses the same environment variables:
+
+```bash
+MESH2SOLID_BIN=/path/to/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 benchmarks/run_examples.py
 ```
 
 ## Architecture

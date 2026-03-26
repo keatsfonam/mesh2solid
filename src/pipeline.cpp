@@ -33,6 +33,7 @@
 #endif
 
 #if defined(MESH2SOLID_WITH_OCCT)
+#include <BRep_Builder.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
@@ -40,11 +41,13 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <STEPControl_Writer.hxx>
+#include <Standard_Failure.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Shell.hxx>
 #include <gp_Pnt.hxx>
 #endif
@@ -1101,11 +1104,12 @@ RunReport analyze(const AnalyzeOptions& options) {
   report.constraint_graph = std::move(constraint_graph);
   report.reconstruction =
       reconstruct_shell(report.cleaned_mesh, report.regions, report.tolerances, options.solid_threshold);
-  if (report.reconstruction.outcome != ReconstructionOutcome::SolidCreated &&
-      report.repair.after.open_edge_count == 0 &&
-      report.repair.after.non_manifold_edge_count == 0) {
+  if (report.reconstruction.outcome != ReconstructionOutcome::SolidCreated) {
     ReconstructionResult faceted_fallback =
-        reconstruct_faceted_mesh_fallback(report.cleaned_mesh, report.tolerances, options.solid_threshold);
+        reconstruct_faceted_mesh_fallback(
+            report.cleaned_mesh, report.tolerances, options.solid_threshold,
+            report.repair.after.open_edge_count == 0 &&
+                report.repair.after.non_manifold_edge_count == 0);
     if (is_better_reconstruction_result(faceted_fallback, report.reconstruction)) {
       report.reconstruction = std::move(faceted_fallback);
     }
