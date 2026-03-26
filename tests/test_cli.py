@@ -55,7 +55,7 @@ BENCHMARK_CASES = {
         "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "xy_nema_bracket.stl",
         "expected_outcome": "shell_only",
         "min_regions": 25,
-        "max_open_edges": 60,
+        "max_open_edges": 42,
         "max_non_manifold_edges": 0,
     },
     "cloudgripper_arm_linear_pinion_gear": {

@@ -3038,6 +3038,164 @@ void add_small_planar_gap_caps(std::vector<ReconstructedFace>& faces,
     return;
   }
 
+  auto loop_perimeter = [&vertices](const std::vector<int>& loop) {
+    if (loop.size() < 2) {
+      return 0.0;
+    }
+
+    double perimeter = 0.0;
+    for (std::size_t index = 0; index < loop.size(); ++index) {
+      const int current = loop[index];
+      const int next = loop[(index + 1) % loop.size()];
+      perimeter += length(vertices[next] - vertices[current]);
+    }
+    return perimeter;
+  };
+
+  auto canonicalize_cycle = [](const std::vector<int>& loop) {
+    if (loop.empty()) {
+      return std::vector<int> {};
+    }
+
+    auto canonical_rotation = [](const std::vector<int>& sequence) {
+      std::vector<int> best = sequence;
+      for (std::size_t offset = 1; offset < sequence.size(); ++offset) {
+        std::vector<int> rotated;
+        rotated.reserve(sequence.size());
+        for (std::size_t index = 0; index < sequence.size(); ++index) {
+          rotated.push_back(sequence[(offset + index) % sequence.size()]);
+        }
+        if (rotated < best) {
+          best = std::move(rotated);
+        }
+      }
+      return best;
+    };
+
+    std::vector<int> forward = canonical_rotation(loop);
+    std::vector<int> reversed(loop.rbegin(), loop.rend());
+    reversed = canonical_rotation(reversed);
+    return reversed < forward ? reversed : forward;
+  };
+
+  auto append_gap_cap_from_loops =
+      [&](const std::vector<int>& component_vertices, std::vector<std::vector<int>> loops,
+          Vec3 seed_normal) {
+        if (loops.empty()) {
+          return false;
+        }
+
+        Vec3 normal = seed_normal;
+        for (const auto& loop : loops) {
+          const Vec3 candidate = newell_loop_normal(loop, vertices);
+          if (length_squared(candidate) > 1e-12) {
+            normal = candidate;
+            break;
+          }
+        }
+        if (length_squared(normal) <= 1e-12) {
+          return false;
+        }
+
+        std::sort(loops.begin(), loops.end(),
+                  [&vertices, &normal](const auto& lhs, const auto& rhs) {
+                    return polygon_area(lhs, vertices, normal) > polygon_area(rhs, vertices, normal);
+                  });
+
+        std::set<int> component_vertex_set(component_vertices.begin(), component_vertices.end());
+        Vec3 centroid {};
+        for (int vertex_index : component_vertex_set) {
+          centroid += vertices[vertex_index];
+        }
+        centroid =
+            centroid / static_cast<double>(std::max<std::size_t>(component_vertex_set.size(), 1));
+
+        double max_distance = 0.0;
+        double sum_squared = 0.0;
+        for (int vertex_index : component_vertex_set) {
+          const double distance = std::abs(dot(normal, vertices[vertex_index] - centroid));
+          max_distance = std::max(max_distance, distance);
+          sum_squared += distance * distance;
+        }
+
+        ReconstructedFace face;
+        face.region_id = -1;
+        face.fit.normal = normal;
+        face.fit.centroid = centroid;
+        face.fit.d = -dot(face.fit.normal, face.fit.centroid);
+        face.fit.max_error = max_distance;
+        face.fit.rms_error =
+            std::sqrt(sum_squared /
+                      static_cast<double>(std::max<std::size_t>(component_vertex_set.size(), 1)));
+        face.fit.confidence = 0.55;
+        face.confidence = face.fit.confidence;
+        face.loops = std::move(loops);
+        orient_loop_to_sign(face.loops.front(), vertices, face.fit.normal, 1.0);
+        for (std::size_t loop_index = 1; loop_index < face.loops.size(); ++loop_index) {
+          orient_loop_to_sign(face.loops[loop_index], vertices, face.fit.normal, -1.0);
+        }
+        face.area = face_total_area(face, vertices, face.fit.normal);
+        if (face.area <= 1e-9) {
+          return false;
+        }
+
+        double total_perimeter = 0.0;
+        for (const auto& loop : face.loops) {
+          total_perimeter += loop_perimeter(loop);
+        }
+        const double thin_strip_width_limit =
+            std::max(tolerances.plane_distance * 0.35, tolerances.vertex_weld * 3.0);
+        if (face.area > max_cap_area &&
+            (total_perimeter <= 1e-9 || (face.area / total_perimeter) > thin_strip_width_limit)) {
+          return false;
+        }
+
+        if (max_distance > tolerances.plane_distance * 0.25) {
+          if (face.loops.size() != 1 || face.loops.front().size() < 4 ||
+              face.loops.front().size() > 6 ||
+              max_distance > tolerances.plane_distance * 1.25) {
+            return false;
+          }
+
+          const std::vector<int>& loop = face.loops.front();
+          bool emitted = false;
+          for (std::size_t index = 1; index + 1 < loop.size(); ++index) {
+            ReconstructedFace triangle_face;
+            triangle_face.region_id = -1;
+            triangle_face.confidence = 0.45;
+            triangle_face.loops.push_back({loop[0], loop[index], loop[index + 1]});
+            Vec3 triangle_normal = newell_loop_normal(triangle_face.loops.front(), vertices);
+            if (length_squared(triangle_normal) <= 1e-12) {
+              continue;
+            }
+            if (dot(triangle_normal, face.fit.normal) < 0.0) {
+              std::reverse(triangle_face.loops.front().begin(), triangle_face.loops.front().end());
+              triangle_normal = triangle_normal * -1.0;
+            }
+            Vec3 triangle_centroid {};
+            for (int vertex_index : triangle_face.loops.front()) {
+              triangle_centroid += vertices[vertex_index];
+            }
+            triangle_centroid = triangle_centroid / 3.0;
+            triangle_face.fit.normal = triangle_normal;
+            triangle_face.fit.centroid = triangle_centroid;
+            triangle_face.fit.d = -dot(triangle_face.fit.normal, triangle_face.fit.centroid);
+            triangle_face.fit.max_error = 0.0;
+            triangle_face.fit.rms_error = 0.0;
+            triangle_face.fit.confidence = triangle_face.confidence;
+            triangle_face.area = face_total_area(triangle_face, vertices, triangle_face.fit.normal);
+            if (triangle_face.area > 1e-9) {
+              faces.push_back(std::move(triangle_face));
+              emitted = true;
+            }
+          }
+          return emitted;
+        }
+
+        faces.push_back(std::move(face));
+        return true;
+      };
+
   std::unordered_map<EdgeKey, std::vector<std::pair<int, int>>, EdgeKeyHash> edge_orientations;
   for (const ReconstructedFace& face : faces) {
     for (const auto& loop : face.loops) {
@@ -3886,10 +4044,123 @@ void optimize_region_loop_choices(ReconstructionResult& result,
       }
     }
 
+    if (result.outcome != ReconstructionOutcome::SolidCreated) {
+      std::vector<std::size_t> pair_priority;
+      pair_priority.reserve(priority.size());
+      for (std::size_t region_index : priority) {
+        if (region_index < candidates.size() && candidates[region_index].size() > 1) {
+          pair_priority.push_back(region_index);
+        }
+      }
+
+      const std::size_t pair_limit = std::min<std::size_t>(6, pair_priority.size());
+      ReconstructionResult best_pair_result = result;
+      std::vector<std::size_t> best_pair_indices = selected_indices;
+
+      for (std::size_t left = 0; left < pair_limit; ++left) {
+        const std::size_t left_region = pair_priority[left];
+        const std::size_t left_current = selected_indices[left_region];
+        for (std::size_t right = left + 1; right < pair_limit; ++right) {
+          const std::size_t right_region = pair_priority[right];
+          const std::size_t right_current = selected_indices[right_region];
+          for (std::size_t left_candidate = 0; left_candidate < candidates[left_region].size();
+               ++left_candidate) {
+            if (left_candidate == left_current) {
+              continue;
+            }
+            for (std::size_t right_candidate = 0;
+                 right_candidate < candidates[right_region].size();
+                 ++right_candidate) {
+              if (right_candidate == right_current) {
+                continue;
+              }
+
+              std::vector<std::size_t> trial_indices = selected_indices;
+              trial_indices[left_region] = left_candidate;
+              trial_indices[right_region] = right_candidate;
+
+              ReconstructionResult trial;
+              trial.vertices = result.vertices;
+              build_faces_from_selected_candidates(regions, candidates, trial_indices, trial.vertices,
+                                                  trial);
+              finalize_shell_reconstruction(trial, mesh, tolerances, solid_threshold);
+              if (is_better_reconstruction_result(trial, best_pair_result)) {
+                best_pair_result = std::move(trial);
+                best_pair_indices = std::move(trial_indices);
+              }
+            }
+          }
+        }
+      }
+
+      if (is_better_reconstruction_result(best_pair_result, result)) {
+        selected_indices = std::move(best_pair_indices);
+        result = std::move(best_pair_result);
+        improved = true;
+      }
+    }
+
     if (!improved || result.outcome == ReconstructionOutcome::SolidCreated) {
       break;
     }
   }
+
+  if (result.outcome == ReconstructionOutcome::SolidCreated) {
+    return;
+  }
+
+  const std::vector<std::size_t> priority =
+      collect_problem_region_indices(result, region_id_to_index, 10);
+  for (std::size_t lhs_offset = 0; lhs_offset < priority.size(); ++lhs_offset) {
+    const std::size_t lhs_region = priority[lhs_offset];
+    if (lhs_region >= candidates.size() || candidates[lhs_region].size() <= 1) {
+      continue;
+    }
+    for (std::size_t rhs_offset = lhs_offset + 1; rhs_offset < priority.size(); ++rhs_offset) {
+      const std::size_t rhs_region = priority[rhs_offset];
+      if (rhs_region >= candidates.size() || candidates[rhs_region].size() <= 1) {
+        continue;
+      }
+
+      ReconstructionResult best_result = result;
+      std::size_t best_lhs_choice = selected_indices[lhs_region];
+      std::size_t best_rhs_choice = selected_indices[rhs_region];
+
+      for (std::size_t lhs_choice = 0; lhs_choice < candidates[lhs_region].size(); ++lhs_choice) {
+        for (std::size_t rhs_choice = 0; rhs_choice < candidates[rhs_region].size(); ++rhs_choice) {
+          if (lhs_choice == selected_indices[lhs_region] &&
+              rhs_choice == selected_indices[rhs_region]) {
+            continue;
+          }
+
+          std::vector<std::size_t> trial_indices = selected_indices;
+          trial_indices[lhs_region] = lhs_choice;
+          trial_indices[rhs_region] = rhs_choice;
+
+          ReconstructionResult trial;
+          trial.vertices = result.vertices;
+          build_faces_from_selected_candidates(regions, candidates, trial_indices, trial.vertices, trial);
+          finalize_shell_reconstruction(trial, mesh, tolerances, solid_threshold);
+          if (is_better_reconstruction_result(trial, best_result)) {
+            best_result = std::move(trial);
+            best_lhs_choice = lhs_choice;
+            best_rhs_choice = rhs_choice;
+          }
+        }
+      }
+
+      if (best_lhs_choice != selected_indices[lhs_region] ||
+          best_rhs_choice != selected_indices[rhs_region]) {
+        selected_indices[lhs_region] = best_lhs_choice;
+        selected_indices[rhs_region] = best_rhs_choice;
+        result = std::move(best_result);
+        if (result.outcome == ReconstructionOutcome::SolidCreated) {
+          return;
+        }
+      }
+    }
+  }
+
 }
 
 void resolve_tiny_conflict_faces(ReconstructionResult& result,
@@ -3980,6 +4251,139 @@ void resolve_tiny_conflict_faces(ReconstructionResult& result,
 
   if (is_better_reconstruction_result(best_result, result)) {
     result = std::move(best_result);
+  }
+}
+
+void resolve_tiny_triangle_gaps(ReconstructionResult& result,
+                                const MeshModel& mesh,
+                                const Tolerances& tolerances,
+                                double solid_threshold) {
+  if (result.open_edge_count < 3 || result.non_manifold_edge_count != 0 || result.faces.empty()) {
+    return;
+  }
+
+  std::unordered_map<EdgeKey, std::vector<std::pair<int, int>>, EdgeKeyHash> edge_orientations;
+  for (const ReconstructedFace& face : result.faces) {
+    for_each_face_edge(face, [&](int from, int to) {
+      edge_orientations[make_edge_key(from, to)].push_back({from, to});
+    });
+  }
+
+  std::unordered_map<int, std::vector<int>> adjacency;
+  std::vector<std::pair<int, int>> open_edges;
+  for (const auto& [edge, orientations] : edge_orientations) {
+    if (orientations.size() != 1) {
+      continue;
+    }
+    open_edges.push_back(orientations.front());
+    adjacency[edge.a].push_back(edge.b);
+    adjacency[edge.b].push_back(edge.a);
+  }
+  if (open_edges.size() < 3) {
+    return;
+  }
+
+  const double triangle_cap_area_limit =
+      std::max(tolerances.plane_distance * tolerances.plane_distance * 180.0,
+               bounds_diagonal(mesh.bounds) * bounds_diagonal(mesh.bounds) * 0.0002);
+
+  std::unordered_set<int> visited_vertices;
+  ReconstructionResult trial = result;
+  bool added_face = false;
+
+  for (const auto& [seed_vertex, neighbors] : adjacency) {
+    (void)neighbors;
+    if (visited_vertices.count(seed_vertex) > 0) {
+      continue;
+    }
+
+    std::vector<int> component_vertices;
+    std::vector<int> frontier {seed_vertex};
+    visited_vertices.insert(seed_vertex);
+    while (!frontier.empty()) {
+      const int current = frontier.back();
+      frontier.pop_back();
+      component_vertices.push_back(current);
+      for (int neighbor : adjacency[current]) {
+        if (visited_vertices.insert(neighbor).second) {
+          frontier.push_back(neighbor);
+        }
+      }
+    }
+
+    if (component_vertices.size() != 3) {
+      continue;
+    }
+    bool degree_two_cycle = true;
+    for (int vertex_index : component_vertices) {
+      if (adjacency[vertex_index].size() != 2) {
+        degree_two_cycle = false;
+        break;
+      }
+    }
+    if (!degree_two_cycle) {
+      continue;
+    }
+
+    const int start = component_vertices.front();
+    int previous = -1;
+    int current = start;
+    std::vector<int> loop;
+    bool closed = false;
+    for (int safety = 0; safety < 5; ++safety) {
+      loop.push_back(current);
+      const std::vector<int>& neighbors_for_vertex = adjacency[current];
+      int next = neighbors_for_vertex.front();
+      if (next == previous && neighbors_for_vertex.size() > 1) {
+        next = neighbors_for_vertex[1];
+      }
+      previous = current;
+      current = next;
+      if (current == start) {
+        closed = true;
+        break;
+      }
+    }
+    if (!closed || loop.size() != 3) {
+      continue;
+    }
+
+    ReconstructedFace face;
+    face.region_id = -1;
+    face.confidence = 0.4;
+    face.loops.push_back(loop);
+    Vec3 normal = newell_loop_normal(loop, trial.vertices);
+    if (length_squared(normal) <= 1e-12) {
+      continue;
+    }
+    face.fit.normal = normal;
+    Vec3 centroid {};
+    for (int vertex_index : loop) {
+      centroid += trial.vertices[vertex_index];
+    }
+    centroid = centroid / 3.0;
+    face.fit.centroid = centroid;
+    face.fit.d = -dot(face.fit.normal, face.fit.centroid);
+    face.fit.max_error = 0.0;
+    face.fit.rms_error = 0.0;
+    face.fit.confidence = face.confidence;
+    orient_loop_to_sign(face.loops.front(), trial.vertices, face.fit.normal, 1.0);
+    face.area = face_total_area(face, trial.vertices, face.fit.normal);
+    if (face.area <= 1e-9 || face.area > triangle_cap_area_limit) {
+      continue;
+    }
+
+    trial.faces.push_back(std::move(face));
+    added_face = true;
+  }
+
+  if (!added_face) {
+    return;
+  }
+
+  finalize_shell_reconstruction(trial, mesh, tolerances, solid_threshold);
+  if (is_better_reconstruction_result(trial, result)) {
+    result = std::move(trial);
   }
 }
 
@@ -4249,8 +4653,17 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
   }
 
   if (result.outcome != ReconstructionOutcome::SolidCreated &&
-      result.non_manifold_edge_count > 0 &&
-      result.open_edge_count <= 12) {
+      result.non_manifold_edge_count == 0 &&
+      result.open_edge_count > 0 &&
+      result.faces.size() >= 32 &&
+      result.open_edge_count <= 64) {
+    resolve_tiny_triangle_gaps(result, mesh, tolerances, solid_threshold);
+  }
+
+  if (result.outcome != ReconstructionOutcome::SolidCreated &&
+      (result.open_edge_count + result.non_manifold_edge_count) > 0 &&
+      result.faces.size() >= 32 &&
+      (result.open_edge_count + result.non_manifold_edge_count) <= 64) {
     std::vector<std::vector<LoopCandidate>> candidates;
     candidates.reserve(regions.size());
     std::vector<std::size_t> selected_indices;

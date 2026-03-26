@@ -41,7 +41,7 @@ beyond the tiny golden fixtures in `tests/fixtures/`.
   - source: CloudGripper Robot
   - license: MIT
   - feature focus: bracket topology with multiple openings and small details
-  - current expected outcome: `shell_only`
+  - current expected outcome: `shell_only` with the open-edge count reduced to 42
 - `benchmark/cloudgripper/arm_linear_pinion_gear.stl`
   - source: CloudGripper Robot
   - license: MIT
