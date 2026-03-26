@@ -623,20 +623,6 @@ TopoDS_Shape finalize_occt_solid_candidate(const TopoDS_Shape& shape, double sew
   return finalized;
 }
 
-bool occt_build_is_cautiously_exportable(const OcctFallbackBuild& build) {
-  if (build.valid || build.result_shape.IsNull() || build.free_edges != 0 ||
-      build.multiple_edges != 0 || build.notes.empty()) {
-    return false;
-  }
-
-  for (const std::string& note : build.notes) {
-    if (note.find("failed validation") == std::string::npos) {
-      return false;
-    }
-  }
-  return true;
-}
-
 bool should_unify_same_domain(const MeshModel& mesh) {
   return mesh.triangles.size() <= 5000;
 }
@@ -770,16 +756,8 @@ OcctFallbackBuild build_occt_faceted_shape(const MeshModel& mesh, const Toleranc
     build.free_edges += component_build.free_edges;
     build.multiple_edges += component_build.multiple_edges;
 
-    const bool component_exportable =
-        (component_build.valid || occt_build_is_cautiously_exportable(component_build)) &&
-        !component_build.result_shape.IsNull();
-    if (component_exportable) {
+    if (component_build.valid && !component_build.result_shape.IsNull()) {
       solids.push_back(component_build.result_shape);
-      if (!component_build.valid) {
-        for (const std::string& note : component_build.notes) {
-          build.notes.push_back("Component " + std::to_string(index + 1) + ": " + note);
-        }
-      }
       continue;
     }
 
@@ -833,20 +811,13 @@ ReconstructionResult reconstruct_occt_faceted_mesh_fallback(const MeshModel& mes
           : static_cast<double>(build.free_edges + build.multiple_edges * 2) /
                 static_cast<double>(build.faces_added);
 
-  if (build.valid || occt_build_is_cautiously_exportable(build)) {
+  if (build.valid) {
     result.outcome = ReconstructionOutcome::SolidCreated;
     result.open_edge_count = 0;
     result.non_manifold_edge_count = 0;
     result.shell_gap_score = 0.0;
-    if (build.valid) {
-      result.failure_reasons.clear();
-      result.confidence = std::max(result.confidence, std::max(solid_threshold, 0.92));
-    } else {
-      result.failure_reasons = {
-          "Open CASCADE reported validation issues, but the fallback solid candidate was closed and was exported cautiously"};
-      result.failure_reasons.insert(result.failure_reasons.end(), build.notes.begin(), build.notes.end());
-      result.confidence = std::max(result.confidence, solid_threshold);
-    }
+    result.failure_reasons.clear();
+    result.confidence = std::max(result.confidence, std::max(solid_threshold, 0.92));
     return result;
   }
 
@@ -866,7 +837,7 @@ bool write_step_file_occt(const std::filesystem::path& path,
                           const MeshModel& mesh,
                           const Tolerances& tolerances) {
   const OcctFallbackBuild build = build_occt_faceted_shape(mesh, tolerances);
-  if ((!build.valid && !occt_build_is_cautiously_exportable(build)) || build.result_shape.IsNull()) {
+  if (!build.valid || build.result_shape.IsNull()) {
     return false;
   }
 
