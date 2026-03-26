@@ -66,7 +66,7 @@ make docker-hard-bench
 ```
 
 That enforces the stricter `docker-full` expectation profile, where every checked-in benchmark is
-expected to reach `solid_created`.
+expected to reach a clean `solid_created` result with no recorded `failure_reasons`.
 
 Open a shell inside the container:
 

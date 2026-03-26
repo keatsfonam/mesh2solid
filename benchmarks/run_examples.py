@@ -132,12 +132,16 @@ def run_case(case: BenchmarkCase,
     actual_outcome = reconstruction["outcome"]
     expected_minimum = minimum_outcome_for_profile(case, expectation_profile)
     minimum_ok = OUTCOME_RANK[actual_outcome] >= OUTCOME_RANK[expected_minimum]
+    clean_success_ok = not (
+        actual_outcome == "solid_created" and bool(reconstruction.get("failure_reasons"))
+    )
     return {
         "case": case,
         "report": report,
         "actual_outcome": actual_outcome,
         "expected_minimum": expected_minimum,
         "minimum_ok": minimum_ok,
+        "clean_success_ok": clean_success_ok,
     }
 
 
@@ -164,7 +168,7 @@ def main() -> int:
         case = result["case"]
         report = result["report"]
         reconstruction = report["reconstruction"]
-        ok = result["minimum_ok"]
+        ok = result["minimum_ok"] and result["clean_success_ok"]
         status = "PASS" if ok else "FAIL"
         if not ok:
             failures += 1
@@ -175,6 +179,8 @@ def main() -> int:
         print(f"  method:          {reconstruction['method']}")
         print(f"  backend:         {report['backend']}")
         print(f"  description:     {case.description}")
+        if not result["clean_success_ok"]:
+            print("  clean success:   no (solid_created reported failure_reasons)")
         if reconstruction.get("failure_reasons"):
             print(f"  notes:           {', '.join(reconstruction['failure_reasons'])}")
 

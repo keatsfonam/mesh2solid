@@ -44,6 +44,8 @@
 #include <STEPControl_Writer.hxx>
 #include <Standard_Failure.hxx>
 #include <ShapeFix_Shape.hxx>
+#include <ShapeFix_ShapeTolerance.hxx>
+#include <ShapeFix_Shell.hxx>
 #include <ShapeFix_Solid.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopAbs_ShapeEnum.hxx>

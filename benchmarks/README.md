@@ -26,7 +26,8 @@ make docker-hard-bench
 ```
 
 That uses the `docker-full` expectation profile, which requires every checked-in benchmark,
-including `cube_gears.3mf`, to reach `solid_created`.
+including `cube_gears.3mf`, to reach a clean `solid_created` result with no reported
+`failure_reasons`.
 
 The benchmark runner treats harder cases as minimum-outcome checks per profile. The host-minimal
 profile still allows `cube_gears.3mf` to stay at `shell_only`, while the already working

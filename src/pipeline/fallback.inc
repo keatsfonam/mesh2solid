@@ -336,6 +336,293 @@ bool occt_shape_is_valid_solid(const TopoDS_Shape& shape) {
   return saw_solid;
 }
 
+std::string occt_status_name(BRepCheck_Status status) {
+  switch (status) {
+    case BRepCheck_NoError:
+      return "NoError";
+    case BRepCheck_InvalidPointOnCurve:
+      return "InvalidPointOnCurve";
+    case BRepCheck_InvalidPointOnCurveOnSurface:
+      return "InvalidPointOnCurveOnSurface";
+    case BRepCheck_InvalidPointOnSurface:
+      return "InvalidPointOnSurface";
+    case BRepCheck_No3DCurve:
+      return "No3DCurve";
+    case BRepCheck_Multiple3DCurve:
+      return "Multiple3DCurve";
+    case BRepCheck_Invalid3DCurve:
+      return "Invalid3DCurve";
+    case BRepCheck_NoCurveOnSurface:
+      return "NoCurveOnSurface";
+    case BRepCheck_InvalidCurveOnSurface:
+      return "InvalidCurveOnSurface";
+    case BRepCheck_InvalidCurveOnClosedSurface:
+      return "InvalidCurveOnClosedSurface";
+    case BRepCheck_InvalidSameRangeFlag:
+      return "InvalidSameRangeFlag";
+    case BRepCheck_InvalidSameParameterFlag:
+      return "InvalidSameParameterFlag";
+    case BRepCheck_InvalidDegeneratedFlag:
+      return "InvalidDegeneratedFlag";
+    case BRepCheck_FreeEdge:
+      return "FreeEdge";
+    case BRepCheck_InvalidMultiConnexity:
+      return "InvalidMultiConnexity";
+    case BRepCheck_InvalidRange:
+      return "InvalidRange";
+    case BRepCheck_EmptyWire:
+      return "EmptyWire";
+    case BRepCheck_RedundantEdge:
+      return "RedundantEdge";
+    case BRepCheck_SelfIntersectingWire:
+      return "SelfIntersectingWire";
+    case BRepCheck_NoSurface:
+      return "NoSurface";
+    case BRepCheck_InvalidWire:
+      return "InvalidWire";
+    case BRepCheck_RedundantWire:
+      return "RedundantWire";
+    case BRepCheck_IntersectingWires:
+      return "IntersectingWires";
+    case BRepCheck_InvalidImbricationOfWires:
+      return "InvalidImbricationOfWires";
+    case BRepCheck_EmptyShell:
+      return "EmptyShell";
+    case BRepCheck_RedundantFace:
+      return "RedundantFace";
+    case BRepCheck_InvalidImbricationOfShells:
+      return "InvalidImbricationOfShells";
+    case BRepCheck_UnorientableShape:
+      return "UnorientableShape";
+    case BRepCheck_NotClosed:
+      return "NotClosed";
+    case BRepCheck_NotConnected:
+      return "NotConnected";
+    case BRepCheck_SubshapeNotInShape:
+      return "SubshapeNotInShape";
+    case BRepCheck_BadOrientation:
+      return "BadOrientation";
+    case BRepCheck_BadOrientationOfSubshape:
+      return "BadOrientationOfSubshape";
+    case BRepCheck_InvalidPolygonOnTriangulation:
+      return "InvalidPolygonOnTriangulation";
+    case BRepCheck_InvalidToleranceValue:
+      return "InvalidToleranceValue";
+    case BRepCheck_EnclosedRegion:
+      return "EnclosedRegion";
+    case BRepCheck_CheckFail:
+      return "CheckFail";
+  }
+  return "UnknownStatus";
+}
+
+std::unordered_map<std::string, int> collect_occt_validation_counts(const TopoDS_Shape& shape) {
+  std::unordered_map<std::string, int> counts;
+  if (shape.IsNull()) {
+    return counts;
+  }
+
+  auto accumulate_statuses = [&counts](const TopoDS_Shape& subject) {
+    BRepCheck_Analyzer analyzer(subject);
+    if (analyzer.IsValid()) {
+      return;
+    }
+
+    auto add_result_statuses = [&counts](const Handle(BRepCheck_Result)& result) {
+      if (result.IsNull()) {
+        return;
+      }
+      for (const BRepCheck_Status status : result->Status()) {
+        if (status != BRepCheck_NoError) {
+          ++counts[occt_status_name(status)];
+        }
+      }
+      result->InitContextIterator();
+      while (result->MoreShapeInContext()) {
+        for (const BRepCheck_Status status : result->StatusOnShape()) {
+          if (status != BRepCheck_NoError) {
+            ++counts[occt_status_name(status)];
+          }
+        }
+        result->NextShapeInContext();
+      }
+    };
+
+    add_result_statuses(analyzer.Result(subject));
+    for (TopExp_Explorer explorer(subject, TopAbs_FACE); explorer.More(); explorer.Next()) {
+      add_result_statuses(analyzer.Result(explorer.Current()));
+    }
+    for (TopExp_Explorer explorer(subject, TopAbs_WIRE); explorer.More(); explorer.Next()) {
+      add_result_statuses(analyzer.Result(explorer.Current()));
+    }
+    for (TopExp_Explorer explorer(subject, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+      add_result_statuses(analyzer.Result(explorer.Current()));
+    }
+  };
+
+  if (shape.ShapeType() == TopAbs_SOLID) {
+    accumulate_statuses(shape);
+  } else {
+    for (TopExp_Explorer explorer(shape, TopAbs_SOLID); explorer.More(); explorer.Next()) {
+      accumulate_statuses(explorer.Current());
+    }
+  }
+  return counts;
+}
+
+std::string occt_validation_summary(const TopoDS_Shape& shape) {
+  if (shape.IsNull()) {
+    return "null_shape";
+  }
+
+  const std::unordered_map<std::string, int> counts = collect_occt_validation_counts(shape);
+  if (counts.empty()) {
+    return "no_reported_statuses";
+  }
+
+  std::vector<std::pair<std::string, int>> ordered(counts.begin(), counts.end());
+  std::sort(ordered.begin(), ordered.end(), [](const auto& lhs, const auto& rhs) {
+    if (lhs.second != rhs.second) {
+      return lhs.second > rhs.second;
+    }
+    return lhs.first < rhs.first;
+  });
+
+  std::ostringstream output;
+  for (std::size_t index = 0; index < ordered.size() && index < 4; ++index) {
+    if (index > 0) {
+      output << ", ";
+    }
+    output << ordered[index].first << "=" << ordered[index].second;
+  }
+  return output.str();
+}
+
+std::size_t occt_validation_issue_count(const TopoDS_Shape& shape) {
+  const std::unordered_map<std::string, int> counts = collect_occt_validation_counts(shape);
+  std::size_t total = 0;
+  for (const auto& [_, count] : counts) {
+    total += static_cast<std::size_t>(std::max(count, 0));
+  }
+  return total;
+}
+
+TopoDS_Shape heal_occt_sewed_shells(const TopoDS_Shape& shape, double sewing_tolerance) {
+  if (shape.IsNull()) {
+    return {};
+  }
+
+  std::vector<TopoDS_Shape> healed_shells;
+  for (TopExp_Explorer explorer(shape, TopAbs_SHELL); explorer.More(); explorer.Next()) {
+    ShapeFix_Shell shell_fixer(TopoDS::Shell(explorer.Current()));
+    shell_fixer.SetPrecision(sewing_tolerance);
+    shell_fixer.SetMinTolerance(std::max(1e-7, sewing_tolerance * 0.25));
+    shell_fixer.SetMaxTolerance(sewing_tolerance * 4.0);
+    shell_fixer.SetNonManifoldFlag(Standard_False);
+    shell_fixer.Perform();
+
+    TopoDS_Shape fixed_shell = shell_fixer.Shape();
+    if (fixed_shell.IsNull()) {
+      fixed_shell = shell_fixer.Shell();
+    }
+    if (fixed_shell.IsNull()) {
+      fixed_shell = explorer.Current();
+    }
+    healed_shells.push_back(fixed_shell);
+  }
+
+  if (healed_shells.empty()) {
+    return shape;
+  }
+
+  TopoDS_Shape healed = make_occt_compound(healed_shells);
+  ShapeFix_Shape shape_fixer(healed);
+  shape_fixer.SetPrecision(sewing_tolerance);
+  shape_fixer.SetMinTolerance(std::max(1e-7, sewing_tolerance * 0.25));
+  shape_fixer.SetMaxTolerance(sewing_tolerance * 4.0);
+  shape_fixer.Perform();
+
+  TopoDS_Shape fixed = shape_fixer.Shape();
+  if (!fixed.IsNull()) {
+    healed = fixed;
+  }
+
+  BRepLib::BuildCurves3d(healed, std::max(1e-7, sewing_tolerance));
+  return healed;
+}
+
+TopoDS_Shape fix_occt_promoted_solids(const TopoDS_Shape& shape, double sewing_tolerance) {
+  if (shape.IsNull()) {
+    return {};
+  }
+
+  std::vector<TopoDS_Shape> solids;
+  if (shape.ShapeType() == TopAbs_SOLID) {
+    solids.push_back(shape);
+  } else {
+    for (TopExp_Explorer explorer(shape, TopAbs_SOLID); explorer.More(); explorer.Next()) {
+      solids.push_back(explorer.Current());
+    }
+  }
+  if (solids.empty()) {
+    return shape;
+  }
+
+  std::vector<TopoDS_Shape> fixed_solids;
+  fixed_solids.reserve(solids.size());
+  for (const TopoDS_Shape& solid_shape : solids) {
+    ShapeFix_Solid solid_fixer;
+    solid_fixer.SetPrecision(sewing_tolerance);
+    solid_fixer.SetMinTolerance(std::max(1e-7, sewing_tolerance * 0.25));
+    solid_fixer.SetMaxTolerance(sewing_tolerance * 4.0);
+    solid_fixer.Init(TopoDS::Solid(solid_shape));
+    solid_fixer.Perform();
+
+    TopoDS_Shape fixed = solid_fixer.Shape();
+    if (fixed.IsNull()) {
+      fixed = solid_shape;
+    }
+    if (fixed.ShapeType() == TopAbs_SOLID) {
+      TopoDS_Solid oriented = TopoDS::Solid(fixed);
+      BRepLib::OrientClosedSolid(oriented);
+      fixed = oriented;
+    }
+    fixed_solids.push_back(fixed);
+  }
+
+  return make_occt_compound(fixed_solids);
+}
+
+TopoDS_Shape finalize_occt_solid_candidate(const TopoDS_Shape& shape, double sewing_tolerance) {
+  if (shape.IsNull()) {
+    return {};
+  }
+
+  TopoDS_Shape finalized = fix_occt_promoted_solids(shape, sewing_tolerance);
+  if (finalized.IsNull()) {
+    return {};
+  }
+
+  ShapeFix_Shape shape_fixer(finalized);
+  shape_fixer.SetPrecision(sewing_tolerance);
+  shape_fixer.SetMinTolerance(std::max(1e-7, sewing_tolerance * 0.25));
+  shape_fixer.SetMaxTolerance(sewing_tolerance * 4.0);
+  shape_fixer.Perform();
+
+  TopoDS_Shape fixed = shape_fixer.Shape();
+  if (!fixed.IsNull()) {
+    finalized = fixed;
+  }
+
+  ShapeFix_ShapeTolerance tolerance_fixer;
+  tolerance_fixer.LimitTolerance(finalized, std::max(1e-7, sewing_tolerance * 0.25),
+                                 sewing_tolerance * 4.0, TopAbs_SHAPE);
+  BRepLib::BuildCurves3d(finalized, std::max(1e-7, sewing_tolerance));
+  BRepLib::SameParameter(finalized, std::max(1e-7, sewing_tolerance), Standard_True);
+  BRepLib::UpdateTolerances(finalized);
+  return finalized;
+}
+
 bool occt_build_is_cautiously_exportable(const OcctFallbackBuild& build) {
   if (build.valid || build.result_shape.IsNull() || build.free_edges != 0 ||
       build.multiple_edges != 0 || build.notes.empty()) {
@@ -403,12 +690,7 @@ OcctFallbackBuild build_occt_faceted_shape_single(const MeshModel& mesh,
       return build;
     }
 
-    ShapeFix_Shape shape_fixer(repaired);
-    shape_fixer.SetPrecision(sewing_tolerance);
-    shape_fixer.SetMinTolerance(std::max(1e-7, sewing_tolerance * 0.25));
-    shape_fixer.SetMaxTolerance(sewing_tolerance * 4.0);
-    shape_fixer.Perform();
-    repaired = shape_fixer.Shape();
+    repaired = heal_occt_sewed_shells(repaired, sewing_tolerance);
 
     TopoDS_Shape solid_candidate = promote_occt_shape_to_solid_shape(repaired, sewing_tolerance);
     if (solid_candidate.IsNull()) {
@@ -416,14 +698,15 @@ OcctFallbackBuild build_occt_faceted_shape_single(const MeshModel& mesh,
       return build;
     }
 
-    ShapeFix_Shape solid_fixer(solid_candidate);
-    solid_fixer.SetPrecision(sewing_tolerance);
-    solid_fixer.SetMinTolerance(std::max(1e-7, sewing_tolerance * 0.25));
-    solid_fixer.SetMaxTolerance(sewing_tolerance * 4.0);
-    solid_fixer.Perform();
-    solid_candidate = solid_fixer.Shape();
-    BRepLib::SameParameter(solid_candidate, std::max(1e-7, sewing_tolerance), Standard_True);
-    BRepLib::UpdateTolerances(solid_candidate);
+    solid_candidate = finalize_occt_solid_candidate(solid_candidate, sewing_tolerance);
+    if (solid_candidate.IsNull()) {
+      build.notes.push_back("Open CASCADE solid normalization failed after shell promotion");
+      return build;
+    }
+
+    TopoDS_Shape best_candidate = solid_candidate;
+    bool best_valid = occt_shape_is_valid_solid(best_candidate);
+    std::size_t best_issues = best_valid ? 0 : occt_validation_issue_count(best_candidate);
 
     if (should_unify_same_domain(mesh)) {
       ShapeUpgrade_UnifySameDomain unify(solid_candidate, Standard_True, Standard_True,
@@ -431,19 +714,33 @@ OcctFallbackBuild build_occt_faceted_shape_single(const MeshModel& mesh,
       unify.SetLinearTolerance(sewing_tolerance);
       unify.SetAngularTolerance(std::max(1.0, tolerances.merge_angle_degrees) * kPi / 180.0);
       unify.Build();
-      solid_candidate = promote_occt_shape_to_solid_shape(unify.Shape(), sewing_tolerance);
-      if (solid_candidate.IsNull()) {
+      TopoDS_Shape unified_candidate =
+          promote_occt_shape_to_solid_shape(unify.Shape(), sewing_tolerance);
+      if (unified_candidate.IsNull()) {
         build.notes.push_back("Open CASCADE same-domain unification broke solid-body promotion");
         return build;
       }
-      BRepLib::SameParameter(solid_candidate, std::max(1e-7, sewing_tolerance), Standard_True);
-      BRepLib::UpdateTolerances(solid_candidate);
+      unified_candidate = finalize_occt_solid_candidate(unified_candidate, sewing_tolerance);
+      if (unified_candidate.IsNull()) {
+        build.notes.push_back("Open CASCADE same-domain unification could not normalize the solid");
+        return build;
+      }
+
+      const bool unified_valid = occt_shape_is_valid_solid(unified_candidate);
+      const std::size_t unified_issues =
+          unified_valid ? 0 : occt_validation_issue_count(unified_candidate);
+      if (unified_valid || (!best_valid && unified_issues < best_issues)) {
+        best_candidate = unified_candidate;
+        best_valid = unified_valid;
+        best_issues = unified_issues;
+      }
     }
 
-    build.result_shape = solid_candidate;
-    build.valid = occt_shape_is_valid_solid(solid_candidate);
+    build.result_shape = best_candidate;
+    build.valid = best_valid;
     if (!build.valid) {
-      build.notes.push_back("Open CASCADE produced a solid candidate that failed validation");
+      build.notes.push_back("Open CASCADE produced a solid candidate that failed validation: " +
+                            occt_validation_summary(best_candidate));
       return build;
     }
   } catch (const Standard_Failure& failure) {
@@ -512,7 +809,8 @@ OcctFallbackBuild build_occt_faceted_shape(const MeshModel& mesh, const Toleranc
 
   build.valid = occt_shape_is_valid_solid(build.result_shape);
   if (!build.valid) {
-    build.notes.push_back("Open CASCADE combined component solids failed validation");
+    build.notes.push_back("Open CASCADE combined component solids failed validation: " +
+                          occt_validation_summary(build.result_shape));
   }
   return build;
 }
@@ -546,6 +844,7 @@ ReconstructionResult reconstruct_occt_faceted_mesh_fallback(const MeshModel& mes
     } else {
       result.failure_reasons = {
           "Open CASCADE reported validation issues, but the fallback solid candidate was closed and was exported cautiously"};
+      result.failure_reasons.insert(result.failure_reasons.end(), build.notes.begin(), build.notes.end());
       result.confidence = std::max(result.confidence, solid_threshold);
     }
     return result;
