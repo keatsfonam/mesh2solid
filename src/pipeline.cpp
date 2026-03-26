@@ -33,6 +33,7 @@
 #endif
 
 #if defined(MESH2SOLID_WITH_OCCT)
+#include <BRepLib.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -43,6 +44,7 @@
 #include <STEPControl_Writer.hxx>
 #include <Standard_Failure.hxx>
 #include <ShapeFix_Shape.hxx>
+#include <ShapeFix_Solid.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp_Explorer.hxx>
@@ -1056,8 +1058,13 @@ std::string constraint_type_to_string(ConstraintType type) {
   return "coplanar_merge";
 }
 
+bool mesh_stats_are_watertight(const MeshStats& stats) {
+  return stats.open_edge_count == 0 && stats.non_manifold_edge_count == 0;
+}
+
 RunReport analyze(const AnalyzeOptions& options) {
   MeshModel mesh = load_mesh(options.input_path);
+  const MeshModel original_mesh = mesh;
   RunReport report;
   report.backend = backend_description();
 
@@ -1100,19 +1107,36 @@ RunReport analyze(const AnalyzeOptions& options) {
       regularize_plane_regions_with_cgal(mesh, segmented, report.tolerances);
   auto [constrained_regions, constraint_graph] = apply_constraints(mesh, segmented, report.tolerances);
   report.cleaned_mesh = mesh;
+  report.reconstruction_mesh = report.cleaned_mesh;
   report.regions = std::move(constrained_regions);
   report.constraint_graph = std::move(constraint_graph);
   report.reconstruction =
       reconstruct_shell(report.cleaned_mesh, report.regions, report.tolerances, options.solid_threshold);
   if (report.reconstruction.outcome != ReconstructionOutcome::SolidCreated) {
-    ReconstructionResult faceted_fallback =
-        reconstruct_faceted_mesh_fallback(
-            report.cleaned_mesh, report.tolerances, options.solid_threshold,
-            report.repair.after.open_edge_count == 0 &&
-                report.repair.after.non_manifold_edge_count == 0);
-    if (is_better_reconstruction_result(faceted_fallback, report.reconstruction)) {
-      report.reconstruction = std::move(faceted_fallback);
+    ReconstructionResult best_reconstruction = report.reconstruction;
+    MeshModel best_reconstruction_mesh = report.reconstruction_mesh;
+
+    ReconstructionResult cleaned_fallback =
+        reconstruct_faceted_mesh_fallback(report.cleaned_mesh, report.tolerances,
+                                          options.solid_threshold,
+                                          mesh_stats_are_watertight(report.repair.after));
+    if (is_better_reconstruction_result(cleaned_fallback, best_reconstruction)) {
+      best_reconstruction = std::move(cleaned_fallback);
+      best_reconstruction_mesh = report.cleaned_mesh;
     }
+
+    if (mesh_stats_are_watertight(report.repair.before)) {
+      ReconstructionResult original_fallback =
+          reconstruct_faceted_mesh_fallback(original_mesh, repair_tolerances,
+                                            options.solid_threshold, true);
+      if (is_better_reconstruction_result(original_fallback, best_reconstruction)) {
+        best_reconstruction = std::move(original_fallback);
+        best_reconstruction_mesh = original_mesh;
+      }
+    }
+
+    report.reconstruction = std::move(best_reconstruction);
+    report.reconstruction_mesh = std::move(best_reconstruction_mesh);
   }
   return report;
 }
@@ -1127,9 +1151,11 @@ void write_outputs(const AnalyzeOptions& options, RunReport& report) {
 
   if (report.reconstruction.outcome == ReconstructionOutcome::SolidCreated) {
     if (report.reconstruction.method == ReconstructionMethod::OcctFacetedMeshFallback) {
+      const Tolerances reconstruction_tolerances =
+          build_tolerances(report.reconstruction_mesh, options.preset);
       report.reconstruction.step_written =
-          write_step_file_occt(options.output_dir / "reconstruction.step", report.cleaned_mesh,
-                               report.tolerances);
+          write_step_file_occt(options.output_dir / "reconstruction.step",
+                               report.reconstruction_mesh, reconstruction_tolerances);
       if (!report.reconstruction.step_written) {
         report.reconstruction.step_written =
             write_step_file(options.output_dir / "reconstruction.step", report.reconstruction);

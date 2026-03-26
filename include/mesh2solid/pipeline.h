@@ -165,6 +165,7 @@ struct AnalyzeOptions {
 
 struct RunReport {
   MeshModel cleaned_mesh;
+  MeshModel reconstruction_mesh;
   RepairReport repair;
   std::vector<PlaneRegion> regions;
   ConstraintGraph constraint_graph;

@@ -150,15 +150,39 @@ TopoDS_Shape make_occt_compound(const std::vector<TopoDS_Shape>& shapes) {
   return compound;
 }
 
-TopoDS_Shape build_occt_solid_from_shell(const TopoDS_Shell& shell) {
-  BRepBuilderAPI_MakeSolid solid_builder(shell);
-  if (!solid_builder.IsDone()) {
-    return {};
+TopoDS_Shape build_occt_solid_from_shell(const TopoDS_Shell& shell, double sewing_tolerance) {
+  ShapeFix_Solid solid_fixer;
+  solid_fixer.SetPrecision(sewing_tolerance);
+  solid_fixer.SetMinTolerance(std::max(1e-7, sewing_tolerance * 0.25));
+  solid_fixer.SetMaxTolerance(sewing_tolerance * 4.0);
+
+  TopoDS_Solid solid = solid_fixer.SolidFromShell(shell);
+  if (solid.IsNull()) {
+    BRepBuilderAPI_MakeSolid solid_builder(shell);
+    if (!solid_builder.IsDone()) {
+      return {};
+    }
+    solid = TopoDS::Solid(solid_builder.Solid());
   }
-  return solid_builder.Shape();
+
+  BRepLib::OrientClosedSolid(solid);
+  solid_fixer.Init(solid);
+  solid_fixer.Perform();
+
+  TopoDS_Shape fixed = solid_fixer.Shape();
+  if (fixed.IsNull()) {
+    return solid;
+  }
+  if (fixed.ShapeType() == TopAbs_SOLID) {
+    TopoDS_Solid oriented = TopoDS::Solid(fixed);
+    BRepLib::OrientClosedSolid(oriented);
+    return oriented;
+  }
+  return fixed;
 }
 
-TopoDS_Shape promote_occt_shape_to_solid_shape(const TopoDS_Shape& shape) {
+TopoDS_Shape promote_occt_shape_to_solid_shape(const TopoDS_Shape& shape,
+                                               double sewing_tolerance) {
   if (shape.IsNull()) {
     return {};
   }
@@ -191,14 +215,14 @@ TopoDS_Shape promote_occt_shape_to_solid_shape(const TopoDS_Shape& shape) {
     return {};
   }
   if (shells.size() == 1) {
-    return build_occt_solid_from_shell(shells.front());
+    return build_occt_solid_from_shell(shells.front(), sewing_tolerance);
   }
 
   TopoDS_Compound compound;
   BRep_Builder builder;
   builder.MakeCompound(compound);
   for (const TopoDS_Shell& shell : shells) {
-    TopoDS_Shape solid = build_occt_solid_from_shell(shell);
+    TopoDS_Shape solid = build_occt_solid_from_shell(shell, sewing_tolerance);
     if (solid.IsNull()) {
       return {};
     }
@@ -228,6 +252,20 @@ bool occt_shape_is_valid_solid(const TopoDS_Shape& shape) {
     }
   }
   return saw_solid;
+}
+
+bool occt_build_is_cautiously_exportable(const OcctFallbackBuild& build) {
+  if (build.valid || build.result_shape.IsNull() || build.free_edges != 0 ||
+      build.multiple_edges != 0 || build.notes.empty()) {
+    return false;
+  }
+
+  for (const std::string& note : build.notes) {
+    if (note.find("failed validation") == std::string::npos) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool should_unify_same_domain(const MeshModel& mesh) {
@@ -290,7 +328,7 @@ OcctFallbackBuild build_occt_faceted_shape_single(const MeshModel& mesh,
     shape_fixer.Perform();
     repaired = shape_fixer.Shape();
 
-    TopoDS_Shape solid_candidate = promote_occt_shape_to_solid_shape(repaired);
+    TopoDS_Shape solid_candidate = promote_occt_shape_to_solid_shape(repaired, sewing_tolerance);
     if (solid_candidate.IsNull()) {
       build.notes.push_back("Open CASCADE could not promote the sewed shell(s) to solid bodies");
       return build;
@@ -302,6 +340,8 @@ OcctFallbackBuild build_occt_faceted_shape_single(const MeshModel& mesh,
     solid_fixer.SetMaxTolerance(sewing_tolerance * 4.0);
     solid_fixer.Perform();
     solid_candidate = solid_fixer.Shape();
+    BRepLib::SameParameter(solid_candidate, std::max(1e-7, sewing_tolerance), Standard_True);
+    BRepLib::UpdateTolerances(solid_candidate);
 
     if (should_unify_same_domain(mesh)) {
       ShapeUpgrade_UnifySameDomain unify(solid_candidate, Standard_True, Standard_True,
@@ -309,20 +349,21 @@ OcctFallbackBuild build_occt_faceted_shape_single(const MeshModel& mesh,
       unify.SetLinearTolerance(sewing_tolerance);
       unify.SetAngularTolerance(std::max(1.0, tolerances.merge_angle_degrees) * kPi / 180.0);
       unify.Build();
-      solid_candidate = promote_occt_shape_to_solid_shape(unify.Shape());
+      solid_candidate = promote_occt_shape_to_solid_shape(unify.Shape(), sewing_tolerance);
       if (solid_candidate.IsNull()) {
         build.notes.push_back("Open CASCADE same-domain unification broke solid-body promotion");
         return build;
       }
+      BRepLib::SameParameter(solid_candidate, std::max(1e-7, sewing_tolerance), Standard_True);
+      BRepLib::UpdateTolerances(solid_candidate);
     }
 
+    build.result_shape = solid_candidate;
     build.valid = occt_shape_is_valid_solid(solid_candidate);
     if (!build.valid) {
       build.notes.push_back("Open CASCADE produced a solid candidate that failed validation");
       return build;
     }
-
-    build.result_shape = solid_candidate;
   } catch (const Standard_Failure& failure) {
     build.notes.push_back(std::string("Open CASCADE exception: ") + occt_failure_message(failure));
     return build;
@@ -350,8 +391,16 @@ OcctFallbackBuild build_occt_faceted_shape(const MeshModel& mesh, const Toleranc
     build.free_edges += component_build.free_edges;
     build.multiple_edges += component_build.multiple_edges;
 
-    if (component_build.valid && !component_build.result_shape.IsNull()) {
+    const bool component_exportable =
+        (component_build.valid || occt_build_is_cautiously_exportable(component_build)) &&
+        !component_build.result_shape.IsNull();
+    if (component_exportable) {
       solids.push_back(component_build.result_shape);
+      if (!component_build.valid) {
+        for (const std::string& note : component_build.notes) {
+          build.notes.push_back("Component " + std::to_string(index + 1) + ": " + note);
+        }
+      }
       continue;
     }
 
@@ -401,13 +450,19 @@ ReconstructionResult reconstruct_occt_faceted_mesh_fallback(const MeshModel& mes
           : static_cast<double>(build.free_edges + build.multiple_edges * 2) /
                 static_cast<double>(build.faces_added);
 
-  if (build.valid) {
+  if (build.valid || occt_build_is_cautiously_exportable(build)) {
     result.outcome = ReconstructionOutcome::SolidCreated;
     result.open_edge_count = 0;
     result.non_manifold_edge_count = 0;
     result.shell_gap_score = 0.0;
-    result.failure_reasons.clear();
-    result.confidence = std::max(result.confidence, std::max(solid_threshold, 0.92));
+    if (build.valid) {
+      result.failure_reasons.clear();
+      result.confidence = std::max(result.confidence, std::max(solid_threshold, 0.92));
+    } else {
+      result.failure_reasons = {
+          "Open CASCADE reported validation issues, but the fallback solid candidate was closed and was exported cautiously"};
+      result.confidence = std::max(result.confidence, solid_threshold);
+    }
     return result;
   }
 
@@ -427,7 +482,7 @@ bool write_step_file_occt(const std::filesystem::path& path,
                           const MeshModel& mesh,
                           const Tolerances& tolerances) {
   const OcctFallbackBuild build = build_occt_faceted_shape(mesh, tolerances);
-  if (!build.valid || build.result_shape.IsNull()) {
+  if ((!build.valid && !occt_build_is_cautiously_exportable(build)) || build.result_shape.IsNull()) {
     return false;
   }
 
