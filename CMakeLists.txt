@@ -6,9 +6,16 @@ option(MESH2SOLID_ENABLE_OPENCASCADE "Enable Open CASCADE when available" ON)
 
 find_package(ZLIB REQUIRED)
 
+set(MESH2SOLID_PIPELINE_IMPL
+  src/pipeline/io.inc
+  src/pipeline/reconstruction.inc
+  src/pipeline/output.inc
+)
+
 add_executable(mesh2solid
   src/main.cpp
   src/pipeline.cpp
+  ${MESH2SOLID_PIPELINE_IMPL}
 )
 
 target_include_directories(mesh2solid PRIVATE include)
