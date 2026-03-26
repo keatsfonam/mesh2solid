@@ -232,7 +232,7 @@ def write_basic_3mf(path: pathlib.Path, vertices, faces, *, unit="millimeter", b
         archive.writestr("3D/3dmodel.model", model_xml)
 
 
-def run_cli(input_mesh: pathlib.Path, out_dir: pathlib.Path):
+def run_cli(input_mesh: pathlib.Path, out_dir: pathlib.Path, solid_threshold: float = 0.60):
     try:
         cli_input = input_mesh.relative_to(REPO_ROOT)
     except ValueError:
@@ -248,7 +248,7 @@ def run_cli(input_mesh: pathlib.Path, out_dir: pathlib.Path):
             "--preset",
             "mechanical",
             "--solid-threshold",
-            "0.60",
+            f"{solid_threshold:.2f}",
         ],
         cwd=REPO_ROOT,
         text=True,
@@ -442,6 +442,21 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
             self.assertTrue((out_dir / "reconstruction.step").exists())
             self.assertEqual(report["reconstruction"]["shell_gap_score"], 0.0)
+
+    def test_faceted_fallback_rescues_closed_mesh_when_analytic_confidence_is_gated(self):
+        mesh_path = FIXTURES_DIR / "rectangular_tube.stl"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            out_dir = tmp_path / "out"
+
+            _, report, _, _ = run_cli(mesh_path, out_dir, solid_threshold=0.99)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["method"], "faceted_mesh_fallback")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+            self.assertTrue((out_dir / "reconstruction.step").exists())
 
     def test_public_benchmark_corpus_matches_expected_outcomes(self):
         for case_name, case in BENCHMARK_CASES.items():

@@ -982,7 +982,11 @@ std::pair<std::array<double, 3>, std::array<Vec3, 3>> jacobi_eigenvectors(
   return {eigenvalues, vectors};
 }
 
+#include "pipeline/cgal.inc"
+
 #include "pipeline/reconstruction.inc"
+
+#include "pipeline/fallback.inc"
 
 #include "pipeline/output.inc"
 
@@ -998,6 +1002,16 @@ std::string reconstruction_outcome_to_string(ReconstructionOutcome outcome) {
       return "solid_created";
   }
   return "analysis_only";
+}
+
+std::string reconstruction_method_to_string(ReconstructionMethod method) {
+  switch (method) {
+    case ReconstructionMethod::AnalyticPlanar:
+      return "analytic_planar";
+    case ReconstructionMethod::FacetedMeshFallback:
+      return "faceted_mesh_fallback";
+  }
+  return "analytic_planar";
 }
 
 std::string constraint_type_to_string(ConstraintType type) {
@@ -1052,12 +1066,23 @@ RunReport analyze(const AnalyzeOptions& options) {
   }
 
   std::vector<PlaneRegion> segmented = segment_planar_regions(mesh, report.tolerances);
+  report.plane_regularization =
+      regularize_plane_regions_with_cgal(mesh, segmented, report.tolerances);
   auto [constrained_regions, constraint_graph] = apply_constraints(mesh, segmented, report.tolerances);
   report.cleaned_mesh = mesh;
   report.regions = std::move(constrained_regions);
   report.constraint_graph = std::move(constraint_graph);
   report.reconstruction =
       reconstruct_shell(report.cleaned_mesh, report.regions, report.tolerances, options.solid_threshold);
+  if (report.reconstruction.outcome != ReconstructionOutcome::SolidCreated &&
+      report.repair.after.open_edge_count == 0 &&
+      report.repair.after.non_manifold_edge_count == 0) {
+    ReconstructionResult faceted_fallback =
+        reconstruct_faceted_mesh_fallback(report.cleaned_mesh, options.solid_threshold);
+    if (is_better_reconstruction_result(faceted_fallback, report.reconstruction)) {
+      report.reconstruction = std::move(faceted_fallback);
+    }
+  }
   return report;
 }
 

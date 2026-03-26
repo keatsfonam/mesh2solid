@@ -127,8 +127,14 @@ enum class ReconstructionOutcome {
   SolidCreated,
 };
 
+enum class ReconstructionMethod {
+  AnalyticPlanar,
+  FacetedMeshFallback,
+};
+
 struct ReconstructionResult {
   ReconstructionOutcome outcome {ReconstructionOutcome::AnalysisOnly};
+  ReconstructionMethod method {ReconstructionMethod::AnalyticPlanar};
   std::vector<Vec3> vertices;
   std::vector<ReconstructedFace> faces;
   std::vector<std::string> failure_reasons;
@@ -141,6 +147,12 @@ struct ReconstructionResult {
   double shell_gap_score {};
   double confidence {};
   bool step_written {};
+};
+
+struct PlaneRegularizationReport {
+  std::string method {"none"};
+  bool applied {};
+  std::size_t adjusted_planes {};
 };
 
 struct AnalyzeOptions {
@@ -158,12 +170,14 @@ struct RunReport {
   ReconstructionResult reconstruction;
   Tolerances tolerances;
   std::string backend;
+  PlaneRegularizationReport plane_regularization;
 };
 
 RunReport analyze(const AnalyzeOptions& options);
 void write_outputs(const AnalyzeOptions& options, RunReport& report);
 
 std::string reconstruction_outcome_to_string(ReconstructionOutcome outcome);
+std::string reconstruction_method_to_string(ReconstructionMethod method);
 std::string constraint_type_to_string(ConstraintType type);
 
 }  // namespace mesh2solid

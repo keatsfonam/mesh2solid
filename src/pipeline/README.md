@@ -6,7 +6,9 @@ Why this exists:
 
 Fragment layout:
 - `io.inc`: XML, ZIP/3MF, STL, and mesh loading helpers
+- `cgal.inc`: optional CGAL-backed plane regularization hooks
 - `reconstruction.inc`: plane fitting, region constraint handling, loop recovery, shell reconstruction, and gap repair
+- `fallback.inc`: faceted mesh fallback reconstruction for closed repaired meshes
 - `output.inc`: STEP/STL emission and JSON/debug/report serialization
 
 This is an internal organization tool, not a public API boundary.

@@ -8,7 +8,9 @@ find_package(ZLIB REQUIRED)
 
 set(MESH2SOLID_PIPELINE_IMPL
   src/pipeline/io.inc
+  src/pipeline/cgal.inc
   src/pipeline/reconstruction.inc
+  src/pipeline/fallback.inc
   src/pipeline/output.inc
 )
 

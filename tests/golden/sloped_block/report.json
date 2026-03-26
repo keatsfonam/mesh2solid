@@ -29,6 +29,11 @@
     "orientation_flips": 0,
     "warnings": []
   },
+  "plane_regularization": {
+    "method": "none",
+    "applied": false,
+    "adjusted_planes": 0
+  },
   "tolerances": {
     "vertex_weld": 0.40000000,
     "plane_distance": 4.00000000,
@@ -48,6 +53,7 @@
   },
   "reconstruction": {
     "outcome": "solid_created",
+    "method": "analytic_planar",
     "face_count": 6,
     "vertex_count": 8,
     "edge_split_insertions": 0,

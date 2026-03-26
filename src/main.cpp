@@ -75,6 +75,13 @@ int main(int argc, char** argv) {
 
     std::cout << "Analyzed: " << options.input_path << "\n";
     std::cout << "Backend: " << report.backend << "\n";
+    std::cout << "Plane regularization: " << report.plane_regularization.method;
+    if (report.plane_regularization.applied) {
+      std::cout << " (" << report.plane_regularization.adjusted_planes << " adjusted)";
+    }
+    std::cout << "\n";
+    std::cout << "Method: "
+              << mesh2solid::reconstruction_method_to_string(report.reconstruction.method) << "\n";
     std::cout << "Regions: " << report.regions.size() << "\n";
     std::cout << "Outcome: "
               << mesh2solid::reconstruction_outcome_to_string(report.reconstruction.outcome)

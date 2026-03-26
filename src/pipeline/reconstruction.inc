@@ -2042,10 +2042,9 @@ void build_faces_from_selected_candidates(const std::vector<PlaneRegion>& region
   }
 }
 
-void finalize_shell_reconstruction(ReconstructionResult& result,
-                                   const MeshModel& mesh,
-                                   const Tolerances& tolerances,
-                                   double solid_threshold) {
+void assess_shell_topology(ReconstructionResult& result,
+                           const MeshModel& mesh,
+                           double solid_threshold) {
   result.failure_reasons.clear();
   result.problematic_regions.clear();
   result.open_edge_count = 0;
@@ -2058,26 +2057,6 @@ void finalize_shell_reconstruction(ReconstructionResult& result,
     result.outcome = ReconstructionOutcome::AnalysisOnly;
     return;
   }
-
-  refine_face_loops_with_shared_vertices(result.faces, result.vertices, tolerances.collinear_distance,
-                                         result.edge_split_insertions);
-  for (ReconstructedFace& face : result.faces) {
-    if (face.loops.empty()) {
-      continue;
-    }
-    orient_loop_to_sign(face.loops.front(), result.vertices, face.fit.normal, 1.0);
-    for (std::size_t loop_index = 1; loop_index < face.loops.size(); ++loop_index) {
-      orient_loop_to_sign(face.loops[loop_index], result.vertices, face.fit.normal, -1.0);
-    }
-    face.area = face_total_area(face, result.vertices, face.fit.normal);
-  }
-  suppress_duplicate_coplanar_faces(result.faces, tolerances);
-  prune_dangling_faces(result.faces, tolerances);
-  const double shell_cap_area_limit =
-      std::min(bounds_diagonal(mesh.bounds) * bounds_diagonal(mesh.bounds) * 0.015,
-               tolerances.plane_distance * tolerances.plane_distance * 40.0);
-  add_small_planar_gap_caps(result.faces, result.vertices, tolerances, shell_cap_area_limit);
-  sanitize_face_loops(result.faces);
 
   std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_use_count;
   std::unordered_map<EdgeKey, std::vector<int>, EdgeKeyHash> edge_regions;
@@ -2155,6 +2134,37 @@ void finalize_shell_reconstruction(ReconstructionResult& result,
   } else {
     result.outcome = ReconstructionOutcome::AnalysisOnly;
   }
+}
+
+void finalize_shell_reconstruction(ReconstructionResult& result,
+                                   const MeshModel& mesh,
+                                   const Tolerances& tolerances,
+                                   double solid_threshold) {
+  if (result.faces.empty()) {
+    assess_shell_topology(result, mesh, solid_threshold);
+    return;
+  }
+
+  refine_face_loops_with_shared_vertices(result.faces, result.vertices, tolerances.collinear_distance,
+                                         result.edge_split_insertions);
+  for (ReconstructedFace& face : result.faces) {
+    if (face.loops.empty()) {
+      continue;
+    }
+    orient_loop_to_sign(face.loops.front(), result.vertices, face.fit.normal, 1.0);
+    for (std::size_t loop_index = 1; loop_index < face.loops.size(); ++loop_index) {
+      orient_loop_to_sign(face.loops[loop_index], result.vertices, face.fit.normal, -1.0);
+    }
+    face.area = face_total_area(face, result.vertices, face.fit.normal);
+  }
+  suppress_duplicate_coplanar_faces(result.faces, tolerances);
+  prune_dangling_faces(result.faces, tolerances);
+  const double shell_cap_area_limit =
+      std::min(bounds_diagonal(mesh.bounds) * bounds_diagonal(mesh.bounds) * 0.015,
+               tolerances.plane_distance * tolerances.plane_distance * 40.0);
+  add_small_planar_gap_caps(result.faces, result.vertices, tolerances, shell_cap_area_limit);
+  sanitize_face_loops(result.faces);
+  assess_shell_topology(result, mesh, solid_threshold);
 }
 
 bool is_better_reconstruction_result(const ReconstructionResult& candidate,
@@ -2617,6 +2627,7 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
                                        const Tolerances& tolerances,
                                        double solid_threshold) {
   ReconstructionResult result;
+  result.method = ReconstructionMethod::AnalyticPlanar;
   if (regions.empty()) {
     result.failure_reasons.push_back("No planar regions were detected");
     return result;
@@ -2793,83 +2804,7 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
                tolerances.plane_distance * tolerances.plane_distance * 40.0);
   add_small_planar_gap_caps(result.faces, result.vertices, tolerances, shell_cap_area_limit);
   sanitize_face_loops(result.faces);
-
-  std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_use_count;
-  std::unordered_map<EdgeKey, std::vector<int>, EdgeKeyHash> edge_regions;
-  for (const ReconstructedFace& face : result.faces) {
-    for_each_face_edge(face, [&](int from, int to) {
-      const EdgeKey key = make_edge_key(from, to);
-      ++edge_use_count[key];
-      edge_regions[key].push_back(face.region_id);
-    });
-  }
-
-  std::size_t open_shell_edges = 0;
-  std::size_t non_manifold_shell_edges = 0;
-  std::unordered_map<int, std::size_t> problematic_region_counts;
-  for (const auto& [edge_key, count] : edge_use_count) {
-    if (count == 1) {
-      ++open_shell_edges;
-      for (int region_id : edge_regions[edge_key]) {
-        ++problematic_region_counts[region_id];
-      }
-    } else if (count != 2) {
-      ++non_manifold_shell_edges;
-      for (int region_id : edge_regions[edge_key]) {
-        ++problematic_region_counts[region_id];
-      }
-    }
-  }
-  result.open_edge_count = open_shell_edges;
-  result.non_manifold_edge_count = non_manifold_shell_edges;
-  result.problematic_regions.clear();
-  result.problematic_regions.reserve(problematic_region_counts.size());
-  for (const auto& [region_id, edge_count] : problematic_region_counts) {
-    result.problematic_regions.push_back({region_id, edge_count});
-  }
-  std::sort(result.problematic_regions.begin(), result.problematic_regions.end(),
-            [](const RegionTopologyIssue& lhs, const RegionTopologyIssue& rhs) {
-              if (lhs.edge_count != rhs.edge_count) {
-                return lhs.edge_count > rhs.edge_count;
-              }
-              return lhs.region_id < rhs.region_id;
-            });
-  result.shell_gap_score =
-      edge_use_count.empty()
-          ? 1.0
-          : static_cast<double>(open_shell_edges + non_manifold_shell_edges) /
-                static_cast<double>(edge_use_count.size());
-
-  result.confidence = 0.0;
-  for (const ReconstructedFace& face : result.faces) {
-    result.confidence += face.confidence;
-  }
-  result.confidence /= static_cast<double>(result.faces.size());
-
-  if (open_shell_edges > 0 || non_manifold_shell_edges > 0) {
-    result.failure_reasons.push_back("Reconstructed shell is open or topologically inconsistent");
-  }
-  if (result.faces.size() < 4) {
-    result.failure_reasons.push_back("Too few reconstructed faces for a closed solid");
-  }
-
-  const double volume = std::abs(signed_polyhedron_volume(result.faces, result.vertices));
-  const double min_volume = std::pow(std::max(bounds_diagonal(mesh.bounds), 1e-6), 3.0) * 1e-6;
-  if (volume <= min_volume) {
-    result.failure_reasons.push_back("Reconstructed shell volume is too small or inconsistent");
-  }
-
-  if (open_shell_edges == 0 && non_manifold_shell_edges == 0 && result.faces.size() >= 4 &&
-      volume > min_volume && result.confidence >= solid_threshold) {
-    result.outcome = ReconstructionOutcome::SolidCreated;
-  } else if (!result.faces.empty()) {
-    result.outcome = ReconstructionOutcome::ShellOnly;
-    if (result.confidence < solid_threshold) {
-      result.failure_reasons.push_back("Solid export was gated by low reconstruction confidence");
-    }
-  } else {
-    result.outcome = ReconstructionOutcome::AnalysisOnly;
-  }
+  assess_shell_topology(result, mesh, solid_threshold);
 
   if (result.outcome != ReconstructionOutcome::SolidCreated &&
       result.non_manifold_edge_count > 0 &&

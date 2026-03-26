@@ -17,8 +17,10 @@ to keep expanding mesh inputs without renaming the core tool again later.
   - tiny component pruning
   - triangle orientation normalization
 - Detects planar regions using adjacency-driven region growing and plane fitting.
+- Optionally regularizes detected planes with CGAL before constraint solving when that backend is available.
 - Builds a constraint graph for coplanar, parallel, and perpendicular plane relations.
 - Reconstructs planar shell faces from snapped boundary loops.
+- Falls back to a faceted mesh B-Rep path when the repaired mesh is closed but the analytic planar path cannot confidently emit a solid.
 - Emits:
   - `cleaned_mesh.stl`
   - `report.json`
@@ -29,7 +31,8 @@ to keep expanding mesh inputs without renaming the core tool again later.
 
 The current code ships with an internal fallback geometry path so it can build in a bare
 workspace. `CMakeLists.txt` is already prepared to link CGAL and Open CASCADE later when
-those libraries are available.
+those libraries are available. In a bare build, plane regularization is reported as `none`
+and the fallback solid path uses the internal faceted reconstruction flow.
 
 ## Build
 
@@ -101,8 +104,10 @@ make golden
 - `src/pipeline.cpp`
   - mesh ingest and repair
   - planar segmentation
+  - optional plane regularization hook
   - constraint solving
   - reconstruction
+  - faceted fallback selection
   - STEP and JSON emission
 - `src/main.cpp`
   - CLI surface

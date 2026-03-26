@@ -297,6 +297,8 @@ std::string constraints_json(const ConstraintGraph& graph) {
 std::string reconstruction_debug_json(const ReconstructionResult& reconstruction) {
   std::ostringstream output;
   output << "{\n";
+  output << "  \"method\": \"" << escape_json(reconstruction_method_to_string(reconstruction.method))
+         << "\",\n";
   output << "  \"vertices\": [\n";
   for (std::size_t index = 0; index < reconstruction.vertices.size(); ++index) {
     output << "    " << vec3_json(reconstruction.vertices[index]);
@@ -385,6 +387,11 @@ std::string report_json(const RunReport& report, const AnalyzeOptions& options) 
   }
   output << "]\n";
   output << "  },\n";
+  output << "  \"plane_regularization\": {\n";
+  output << "    \"method\": \"" << escape_json(report.plane_regularization.method) << "\",\n";
+  output << "    \"applied\": " << bool_json(report.plane_regularization.applied) << ",\n";
+  output << "    \"adjusted_planes\": " << report.plane_regularization.adjusted_planes << "\n";
+  output << "  },\n";
   output << "  \"tolerances\": {\n";
   output << "    \"vertex_weld\": " << format_double(report.tolerances.vertex_weld) << ",\n";
   output << "    \"plane_distance\": " << format_double(report.tolerances.plane_distance) << ",\n";
@@ -410,6 +417,8 @@ std::string report_json(const RunReport& report, const AnalyzeOptions& options) 
   output << "  \"reconstruction\": {\n";
   output << "    \"outcome\": \""
          << escape_json(reconstruction_outcome_to_string(report.reconstruction.outcome)) << "\",\n";
+  output << "    \"method\": \""
+         << escape_json(reconstruction_method_to_string(report.reconstruction.method)) << "\",\n";
   output << "    \"face_count\": " << report.reconstruction.faces.size() << ",\n";
   output << "    \"vertex_count\": " << report.reconstruction.vertices.size() << ",\n";
   output << "    \"edge_split_insertions\": " << report.reconstruction.edge_split_insertions << ",\n";
