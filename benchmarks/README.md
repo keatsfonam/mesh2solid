@@ -17,12 +17,17 @@ Run the checked-in public benchmark corpus with:
 make hard-bench
 ```
 
+That uses the `host-minimal` expectation profile, which keeps the lightweight fallback baseline.
+
 Or run the same set against the Docker full-stack build with:
 
 ```bash
 make docker-hard-bench
 ```
 
-That benchmark runner treats the harder cases as minimum-outcome checks. Known difficult meshes
-such as `cube_gears.3mf` are still allowed to stay at `shell_only`, while the already working
+That uses the `docker-full` expectation profile, which requires every checked-in benchmark,
+including `cube_gears.3mf`, to reach `solid_created`.
+
+The benchmark runner treats harder cases as minimum-outcome checks per profile. The host-minimal
+profile still allows `cube_gears.3mf` to stay at `shell_only`, while the already working
 mechanical parts and `heartgears.3mf` are required to reach `solid_created`.

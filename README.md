@@ -51,11 +51,16 @@ Run the broader checked-in benchmark corpus against the host build:
 make hard-bench
 ```
 
+That enforces the `host-minimal` benchmark expectation profile.
+
 Run that same corpus against the Docker full-stack build:
 
 ```bash
 make docker-hard-bench
 ```
+
+That enforces the stricter `docker-full` expectation profile, where every checked-in benchmark is
+expected to reach `solid_created`.
 
 Open a shell inside the container:
 
@@ -116,14 +121,15 @@ outputs under `tests/golden/`. It also includes a more complex bridge example un
 `examples/complex/bridge.stl` as a smoke regression for localized shell healing.
 
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
-with upstream STL and 3MF models. Those smoke tests intentionally include both current
-`solid_created` cases and known-hard `shell_only` cases so robustness work can expand coverage
-without weakening the simpler baseline.
+with upstream STL and 3MF models. Those smoke tests intentionally keep separate expectation
+profiles for the lightweight host build and the Docker full-stack build, so we can expand
+robustness without weakening the simpler baseline.
 
 `examples/benchmark/` adds a broader public corpus with both current-success and current-hard
 cases from the 3MF Consortium, CloudGripper Robot, and BCN3D Moveo repositories. Those smoke
 tests lock in expected outcomes while we expand robustness without regressing the simpler
-fixtures.
+fixtures, and the Docker full-stack profile now requires every checked-in benchmark to reach
+`solid_created`.
 
 Refresh the golden baseline with:
 

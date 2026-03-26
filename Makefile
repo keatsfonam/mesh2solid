@@ -25,7 +25,7 @@ golden: $(TARGET)
 	python3 tests/update_goldens.py
 
 hard-bench: $(TARGET)
-	python3 benchmarks/run_examples.py
+	python3 benchmarks/run_examples.py --expectation-profile host-minimal
 
 cmake-minimal:
 	cmake --preset host-minimal
@@ -44,7 +44,7 @@ docker-test: docker-image
 
 docker-hard-bench: docker-image
 	rm -rf build-cmake/docker-full
-	$(DOCKER_RUN) bash -lc "cmake --preset docker-full && cmake --build --preset docker-full && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 benchmarks/run_examples.py"
+	$(DOCKER_RUN) bash -lc "cmake --preset docker-full && cmake --build --preset docker-full && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 benchmarks/run_examples.py --expectation-profile docker-full"
 
 docker-shell: docker-image
 	docker run --rm -it -u $$(id -u):$$(id -g) -v "$(CURDIR)":/workspace -w /workspace $(DOCKER_IMAGE) bash

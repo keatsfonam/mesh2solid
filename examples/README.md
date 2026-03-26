@@ -31,7 +31,9 @@ beyond the tiny golden fixtures in `tests/fixtures/`.
   - source: 3MF Consortium `3mf-samples`
   - license: BSD-2-Clause
   - feature focus: multi-body gear assembly imported from `3MF`
-  - current expected minimum outcome: `shell_only`
+  - current expected outcome:
+    - `host-minimal`: `shell_only`
+    - `docker-full`: `solid_created`
 - `benchmark/3mf_samples_hard/heartgears.3mf`
   - source: 3MF Consortium `3mf-samples`
   - license: BSD-2-Clause

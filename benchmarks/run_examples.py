@@ -94,6 +94,13 @@ BENCHMARK_CASES = [
     ),
 ]
 
+EXPECTATION_PROFILE_OVERRIDES = {
+    "host-minimal": {},
+    "docker-full": {
+        "examples/benchmark/3mf_samples_hard/cube_gears.3mf": "solid_created",
+    },
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the checked-in benchmark corpus.")
@@ -127,6 +134,12 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("MESH2SOLID_SKIP_BUILD") == "1",
         help="Skip the default host build step.",
     )
+    parser.add_argument(
+        "--expectation-profile",
+        default=os.environ.get("MESH2SOLID_EXPECTATION_PROFILE", "host-minimal"),
+        choices=sorted(EXPECTATION_PROFILE_OVERRIDES.keys()),
+        help="Benchmark expectation profile to enforce.",
+    )
     return parser.parse_args()
 
 
@@ -156,10 +169,16 @@ def selected_cases(filters: list[str]) -> list[BenchmarkCase]:
     return cases
 
 
+def minimum_outcome_for_case(case: BenchmarkCase, expectation_profile: str) -> str:
+    overrides = EXPECTATION_PROFILE_OVERRIDES.get(expectation_profile, {})
+    return overrides.get(case.relative_path, case.minimum_outcome)
+
+
 def run_case(case: BenchmarkCase,
              binary: pathlib.Path,
              output_dir: pathlib.Path,
-             solid_threshold: float) -> dict[str, object]:
+             solid_threshold: float,
+             expectation_profile: str) -> dict[str, object]:
     case_out = output_dir / case.stem
     if case_out.exists():
         shutil.rmtree(case_out)
@@ -187,11 +206,13 @@ def run_case(case: BenchmarkCase,
 
     reconstruction = report["reconstruction"]
     actual_outcome = reconstruction["outcome"]
-    minimum_ok = OUTCOME_RANK[actual_outcome] >= OUTCOME_RANK[case.minimum_outcome]
+    expected_minimum = minimum_outcome_for_case(case, expectation_profile)
+    minimum_ok = OUTCOME_RANK[actual_outcome] >= OUTCOME_RANK[expected_minimum]
     return {
         "case": case,
         "report": report,
         "actual_outcome": actual_outcome,
+        "expected_minimum": expected_minimum,
         "minimum_ok": minimum_ok,
     }
 
@@ -209,9 +230,10 @@ def main() -> int:
     ensure_binary(binary, args.skip_build)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    results = []
-    for case in cases:
-        results.append(run_case(case, binary, out_dir, args.solid_threshold))
+    results = [
+        run_case(case, binary, out_dir, args.solid_threshold, args.expectation_profile)
+        for case in cases
+    ]
 
     failures = 0
     for result in results:
@@ -224,7 +246,7 @@ def main() -> int:
             failures += 1
 
         print(f"{status} {case.relative_path}")
-        print(f"  minimum outcome: {case.minimum_outcome}")
+        print(f"  minimum outcome: {result['expected_minimum']}")
         print(f"  actual outcome:  {result['actual_outcome']}")
         print(f"  method:          {reconstruction['method']}")
         print(f"  backend:         {report['backend']}")
@@ -233,6 +255,7 @@ def main() -> int:
             print(f"  notes:           {', '.join(reconstruction['failure_reasons'])}")
 
     print()
+    print(f"Expectation profile: {args.expectation_profile}")
     print(f"Benchmarks run: {len(results)}")
     print(f"Failures: {failures}")
     return 1 if failures else 0
