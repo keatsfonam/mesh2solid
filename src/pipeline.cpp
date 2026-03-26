@@ -3030,6 +3030,8 @@ Vec3 newell_loop_normal(const std::vector<int>& loop, const std::vector<Vec3>& v
   return normalized(normal);
 }
 
+std::vector<int> sanitize_loop_indices(std::vector<int> loop);
+
 void add_small_planar_gap_caps(std::vector<ReconstructedFace>& faces,
                                const std::vector<Vec3>& vertices,
                                const Tolerances& tolerances,
@@ -3274,12 +3276,17 @@ void add_small_planar_gap_caps(std::vector<ReconstructedFace>& faces,
       }
     }
 
-    if (component_edges.size() < 3 || component_edges.size() > 16) {
+    if (component_edges.size() < 3 || component_edges.size() > 24) {
       continue;
     }
 
     const Vec3 seed_normal = estimate_component_normal(component_vertices);
     std::vector<std::vector<int>> loops;
+    std::unordered_map<int, std::vector<int>> component_adjacency;
+    for (const auto& [from, to] : component_edges) {
+      component_adjacency[from].push_back(to);
+      component_adjacency[to].push_back(from);
+    }
     bool degree_two_cycle = true;
     for (int vertex_index : component_vertices) {
       if (adjacency[vertex_index].size() != 2) {
@@ -3316,100 +3323,72 @@ void add_small_planar_gap_caps(std::vector<ReconstructedFace>& faces,
       loops = extract_loops_for_region_undirected(component_edges, vertices, seed_normal,
                                                   gap_loop_tolerance);
     }
+    if (!degree_two_cycle && component_edges.size() <= 24) {
+      const double gap_loop_tolerance = std::max(tolerances.vertex_weld * 0.1, 1e-6);
+      std::vector<std::vector<int>> simple_cycles;
+      std::set<std::vector<int>> seen_cycles;
+      std::vector<int> starts;
+      starts.reserve(component_adjacency.size());
+      for (const auto& [vertex, _] : component_adjacency) {
+        starts.push_back(vertex);
+      }
+      std::sort(starts.begin(), starts.end());
+
+      for (int start : starts) {
+        std::vector<int> path {start};
+        std::unordered_set<int> in_path {start};
+        std::function<void(int, int)> dfs = [&](int current, int previous) {
+          if (path.size() > 12) {
+            return;
+          }
+          const auto adjacency_it = component_adjacency.find(current);
+          if (adjacency_it == component_adjacency.end()) {
+            return;
+          }
+          for (int neighbor : adjacency_it->second) {
+            if (neighbor == previous) {
+              continue;
+            }
+            if (neighbor == start) {
+              if (path.size() >= 3) {
+                std::vector<int> candidate =
+                    simplify_loop(path, vertices, seed_normal, gap_loop_tolerance);
+                candidate = sanitize_loop_indices(std::move(candidate));
+                if (candidate.size() >= 3) {
+                  std::vector<int> canonical = canonicalize_cycle(candidate);
+                  if (seen_cycles.insert(canonical).second) {
+                    simple_cycles.push_back(std::move(candidate));
+                  }
+                }
+              }
+              continue;
+            }
+            if (in_path.count(neighbor) > 0) {
+              continue;
+            }
+            path.push_back(neighbor);
+            in_path.insert(neighbor);
+            dfs(neighbor, current);
+            in_path.erase(neighbor);
+            path.pop_back();
+          }
+        };
+        dfs(start, -1);
+      }
+
+      bool emitted_cycle_caps = false;
+      for (std::vector<int>& cycle : simple_cycles) {
+        emitted_cycle_caps |= append_gap_cap_from_loops(cycle, {cycle}, seed_normal);
+      }
+      if (emitted_cycle_caps) {
+        continue;
+      }
+    }
     if (loops.empty()) {
       continue;
     }
 
-    Vec3 normal = seed_normal;
-    for (const auto& loop : loops) {
-      const Vec3 candidate = newell_loop_normal(loop, vertices);
-      if (length_squared(candidate) > 1e-12) {
-        normal = candidate;
-        break;
-      }
-    }
-    if (length_squared(normal) <= 1e-12) {
-      continue;
-    }
-
-    std::sort(loops.begin(), loops.end(), [&vertices, &normal](const auto& lhs, const auto& rhs) {
-      return polygon_area(lhs, vertices, normal) > polygon_area(rhs, vertices, normal);
-    });
-
-    Vec3 centroid {};
-    for (int vertex_index : component_vertex_set) {
-      centroid += vertices[vertex_index];
-    }
-    centroid = centroid / static_cast<double>(std::max<std::size_t>(component_vertex_set.size(), 1));
-
-    double max_distance = 0.0;
-    double sum_squared = 0.0;
-    for (int vertex_index : component_vertex_set) {
-      const double distance = std::abs(dot(normal, vertices[vertex_index] - centroid));
-      max_distance = std::max(max_distance, distance);
-      sum_squared += distance * distance;
-    }
-
-    ReconstructedFace face;
-    face.region_id = -1;
-    face.fit.normal = normal;
-    face.fit.centroid = centroid;
-    face.fit.d = -dot(face.fit.normal, face.fit.centroid);
-    face.fit.max_error = max_distance;
-    face.fit.rms_error = std::sqrt(sum_squared /
-                                   static_cast<double>(std::max<std::size_t>(component_vertex_set.size(), 1)));
-    face.fit.confidence = 0.55;
-    face.confidence = face.fit.confidence;
-    face.loops = std::move(loops);
-    orient_loop_to_sign(face.loops.front(), vertices, face.fit.normal, 1.0);
-    for (std::size_t loop_index = 1; loop_index < face.loops.size(); ++loop_index) {
-      orient_loop_to_sign(face.loops[loop_index], vertices, face.fit.normal, -1.0);
-    }
-    face.area = face_total_area(face, vertices, face.fit.normal);
-    if (face.area <= 1e-9 || face.area > max_cap_area) {
-      continue;
-    }
-
-    if (max_distance > tolerances.plane_distance * 0.25) {
-      if (face.loops.size() != 1 || face.loops.front().size() < 4 || face.loops.front().size() > 6 ||
-          max_distance > tolerances.plane_distance * 1.25) {
-        continue;
-      }
-
-      const std::vector<int>& loop = face.loops.front();
-      for (std::size_t index = 1; index + 1 < loop.size(); ++index) {
-        ReconstructedFace triangle_face;
-        triangle_face.region_id = -1;
-        triangle_face.confidence = 0.45;
-        triangle_face.loops.push_back({loop[0], loop[index], loop[index + 1]});
-        Vec3 triangle_normal = newell_loop_normal(triangle_face.loops.front(), vertices);
-        if (length_squared(triangle_normal) <= 1e-12) {
-          continue;
-        }
-        if (dot(triangle_normal, face.fit.normal) < 0.0) {
-          std::reverse(triangle_face.loops.front().begin(), triangle_face.loops.front().end());
-          triangle_normal = triangle_normal * -1.0;
-        }
-        Vec3 triangle_centroid {};
-        for (int vertex_index : triangle_face.loops.front()) {
-          triangle_centroid += vertices[vertex_index];
-        }
-        triangle_centroid = triangle_centroid / 3.0;
-        triangle_face.fit.normal = triangle_normal;
-        triangle_face.fit.centroid = triangle_centroid;
-        triangle_face.fit.d = -dot(triangle_face.fit.normal, triangle_face.fit.centroid);
-        triangle_face.fit.max_error = 0.0;
-        triangle_face.fit.rms_error = 0.0;
-        triangle_face.fit.confidence = triangle_face.confidence;
-        triangle_face.area = face_total_area(triangle_face, vertices, triangle_face.fit.normal);
-        if (triangle_face.area > 1e-9) {
-          faces.push_back(std::move(triangle_face));
-        }
-      }
-      continue;
-    }
-
-    faces.push_back(std::move(face));
+    append_gap_cap_from_loops(component_vertices, std::move(loops), seed_normal);
   }
 }
 

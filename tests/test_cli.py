@@ -53,10 +53,8 @@ BENCHMARK_CASES = {
     },
     "cloudgripper_xy_nema_bracket": {
         "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "xy_nema_bracket.stl",
-        "expected_outcome": "shell_only",
+        "expected_outcome": "solid_created",
         "min_regions": 25,
-        "max_open_edges": 42,
-        "max_non_manifold_edges": 0,
     },
     "cloudgripper_arm_linear_pinion_gear": {
         "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "arm_linear_pinion_gear.stl",
@@ -67,7 +65,7 @@ BENCHMARK_CASES = {
         "path": EXAMPLES_DIR / "benchmark" / "bcn3d_moveo" / "t4m1e.stl",
         "expected_outcome": "shell_only",
         "min_regions": 25,
-        "max_open_edges": 63,
+        "max_open_edges": 14,
         "max_non_manifold_edges": 0,
     },
 }
