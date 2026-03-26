@@ -1,4 +1,6 @@
 build/
+build-cmake/
+dist/
 tmp/
 out/
 *.pyc

@@ -53,6 +53,21 @@ build/mesh2solid analyze part.stl --out out --preset mechanical --solid-threshol
 build/mesh2solid analyze part.3mf --out out --preset mechanical --solid-threshold 0.75
 ```
 
+## CI And Release
+
+GitHub Actions now builds and tests the project on Linux and macOS for pushes, pull requests,
+and manual runs.
+
+Tagged releases publish prebuilt archives to GitHub Releases. To cut a release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+That tag triggers the release workflow, which rebuilds the binary, reruns the test suite,
+packages `mesh2solid`, and uploads platform archives to the matching GitHub release.
+
 ## Test Baseline
 
 The repo includes checked-in planar fixtures, including a through-hole tube, and exact golden

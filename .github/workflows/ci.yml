@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    env:
+      CXX: c++
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zlib1g-dev
+
+      - name: Build with Make
+        run: make
+
+      - name: Build with CMake
+        run: |
+          cmake -S . -B build-cmake \
+            -DMESH2SOLID_ENABLE_CGAL=OFF \
+            -DMESH2SOLID_ENABLE_OPENCASCADE=OFF
+          cmake --build build-cmake --config Release
+
+      - name: Run test suite
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
