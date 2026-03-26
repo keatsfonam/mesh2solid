@@ -24,5 +24,5 @@ make docker-hard-bench
 ```
 
 That benchmark runner treats the harder cases as minimum-outcome checks. Known difficult meshes
-such as the new gear-heavy `3MF` samples are allowed to stay at `shell_only`, while the already
-working mechanical parts are still required to reach `solid_created`.
+such as `cube_gears.3mf` are still allowed to stay at `shell_only`, while the already working
+mechanical parts and `heartgears.3mf` are required to reach `solid_created`.

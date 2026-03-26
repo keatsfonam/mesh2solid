@@ -547,6 +547,22 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertTrue((out_dir / "reconstruction.step").exists())
             self.assertEqual(report["reconstruction"]["shell_gap_score"], 0.0)
 
+    def test_heartgears_example_closes_to_solid(self):
+        heartgears_path = EXAMPLES_DIR / "benchmark" / "3mf_samples_hard" / "heartgears.3mf"
+        self.assertTrue(heartgears_path.exists(), f"Missing benchmark fixture: {heartgears_path}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            out_dir = tmp_path / "out"
+
+            _, report, _, _ = run_cli(heartgears_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["method"], "faceted_mesh_fallback")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+            self.assertTrue((out_dir / "reconstruction.step").exists())
+
     def test_faceted_fallback_rescues_closed_mesh_when_analytic_confidence_is_gated(self):
         mesh_path = FIXTURES_DIR / "rectangular_tube.stl"
 

@@ -1,4 +1,62 @@
+void weld_reconstructed_vertices(ReconstructionResult& result,
+                                 const MeshModel& mesh,
+                                 const Tolerances& tolerances) {
+  if (result.vertices.empty()) {
+    return;
+  }
+
+  const double diagonal = std::max(bounds_diagonal(mesh.bounds), 1e-6);
+  const double weld_tolerance =
+      std::max(diagonal * 1e-9, std::min(tolerances.vertex_weld * 1e-4, 1e-7));
+  auto quantize = [weld_tolerance](double value) -> long long {
+    return static_cast<long long>(std::llround(value / weld_tolerance));
+  };
+
+  std::vector<Vec3> welded_vertices;
+  welded_vertices.reserve(result.vertices.size());
+  std::vector<int> remap(result.vertices.size(), -1);
+  std::unordered_map<GridKey, std::vector<int>, GridKeyHash> buckets;
+
+  for (std::size_t vertex_index = 0; vertex_index < result.vertices.size(); ++vertex_index) {
+    const Vec3& point = result.vertices[vertex_index];
+    const GridKey key {quantize(point.x), quantize(point.y), quantize(point.z)};
+    const std::optional<int> found =
+        find_nearby_grid_vertex(buckets, welded_vertices, key, point, weld_tolerance);
+    if (found.has_value()) {
+      remap[vertex_index] = *found;
+      continue;
+    }
+
+    const int welded_index = static_cast<int>(welded_vertices.size());
+    welded_vertices.push_back(point);
+    buckets[key].push_back(welded_index);
+    remap[vertex_index] = welded_index;
+  }
+
+  if (welded_vertices.size() == result.vertices.size()) {
+    return;
+  }
+
+  for (ReconstructedFace& face : result.faces) {
+    std::vector<std::vector<int>> welded_loops;
+    welded_loops.reserve(face.loops.size());
+    for (std::vector<int>& loop : face.loops) {
+      for (int& vertex_index : loop) {
+        vertex_index = remap[vertex_index];
+      }
+      std::vector<int> cleaned = sanitize_loop_indices(std::move(loop));
+      if (cleaned.size() >= 3) {
+        welded_loops.push_back(std::move(cleaned));
+      }
+    }
+    face.loops = std::move(welded_loops);
+  }
+
+  result.vertices = std::move(welded_vertices);
+}
+
 ReconstructionResult reconstruct_internal_faceted_mesh_fallback(const MeshModel& mesh,
+                                                                const Tolerances& tolerances,
                                                                 double solid_threshold) {
   ReconstructionResult result;
   result.method = ReconstructionMethod::FacetedMeshFallback;
@@ -6,7 +64,16 @@ ReconstructionResult reconstruct_internal_faceted_mesh_fallback(const MeshModel&
   result.faces.reserve(mesh.triangles.size());
 
   for (const Triangle& triangle : mesh.triangles) {
-    if (triangle.area <= 1e-12) {
+    if (triangle.vertices[0] == triangle.vertices[1] || triangle.vertices[1] == triangle.vertices[2] ||
+        triangle.vertices[2] == triangle.vertices[0]) {
+      continue;
+    }
+
+    const Vec3& a = mesh.vertices[triangle.vertices[0]];
+    const Vec3& b = mesh.vertices[triangle.vertices[1]];
+    const Vec3& c = mesh.vertices[triangle.vertices[2]];
+    const double geometric_area = triangle_area(a, b, c);
+    if (geometric_area <= 1e-12) {
       continue;
     }
 
@@ -14,13 +81,7 @@ ReconstructionResult reconstruct_internal_faceted_mesh_fallback(const MeshModel&
     face.region_id = triangle.region_id;
     face.loops.push_back({triangle.vertices[0], triangle.vertices[1], triangle.vertices[2]});
 
-    Vec3 normal = triangle.normal;
-    if (length_squared(normal) <= 1e-12) {
-      const Vec3& a = mesh.vertices[triangle.vertices[0]];
-      const Vec3& b = mesh.vertices[triangle.vertices[1]];
-      const Vec3& c = mesh.vertices[triangle.vertices[2]];
-      normal = normalized(cross(b - a, c - a));
-    }
+    Vec3 normal = triangle_normal(a, b, c);
     if (length_squared(normal) <= 1e-12) {
       continue;
     }
@@ -38,10 +99,12 @@ ReconstructionResult reconstruct_internal_faceted_mesh_fallback(const MeshModel&
     face.fit.max_error = 0.0;
     face.fit.confidence = 1.0;
     face.confidence = 1.0;
-    face.area = triangle.area;
+    face.area = geometric_area;
     result.faces.push_back(std::move(face));
   }
 
+  weld_reconstructed_vertices(result, mesh, tolerances);
+  sanitize_face_loops(result.faces);
   assess_shell_topology(result, mesh, solid_threshold);
   return result;
 }
@@ -281,7 +344,15 @@ OcctFallbackBuild build_occt_faceted_shape_single(const MeshModel& mesh,
                                  Standard_False);
 
     for (const Triangle& triangle : mesh.triangles) {
-      if (triangle.area <= 1e-12) {
+      if (triangle.vertices[0] == triangle.vertices[1] || triangle.vertices[1] == triangle.vertices[2] ||
+          triangle.vertices[2] == triangle.vertices[0]) {
+        continue;
+      }
+
+      const Vec3& a = mesh.vertices[triangle.vertices[0]];
+      const Vec3& b = mesh.vertices[triangle.vertices[1]];
+      const Vec3& c = mesh.vertices[triangle.vertices[2]];
+      if (triangle_area(a, b, c) <= 1e-12) {
         continue;
       }
 
@@ -438,7 +509,8 @@ OcctFallbackBuild build_occt_faceted_shape(const MeshModel& mesh, const Toleranc
 ReconstructionResult reconstruct_occt_faceted_mesh_fallback(const MeshModel& mesh,
                                                             const Tolerances& tolerances,
                                                             double solid_threshold) {
-  ReconstructionResult result = reconstruct_internal_faceted_mesh_fallback(mesh, solid_threshold);
+  ReconstructionResult result =
+      reconstruct_internal_faceted_mesh_fallback(mesh, tolerances, solid_threshold);
   result.method = ReconstructionMethod::OcctFacetedMeshFallback;
 
   const OcctFallbackBuild build = build_occt_faceted_shape(mesh, tolerances);
@@ -516,9 +588,12 @@ ReconstructionResult reconstruct_faceted_mesh_fallback(const MeshModel& mesh,
                                                        bool allow_internal_fallback) {
   ReconstructionResult result;
   if (allow_internal_fallback) {
-    result = reconstruct_internal_faceted_mesh_fallback(mesh, solid_threshold);
+    result = reconstruct_internal_faceted_mesh_fallback(mesh, tolerances, solid_threshold);
   }
 #if defined(MESH2SOLID_WITH_OCCT)
+  if (result.outcome == ReconstructionOutcome::SolidCreated) {
+    return result;
+  }
   ReconstructionResult occt_result =
       reconstruct_occt_faceted_mesh_fallback(mesh, tolerances, solid_threshold);
   if (is_better_reconstruction_result(occt_result, result)) {

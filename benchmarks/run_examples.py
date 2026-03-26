@@ -59,7 +59,7 @@ BENCHMARK_CASES = [
     ),
     BenchmarkCase(
         "examples/benchmark/3mf_samples_hard/heartgears.3mf",
-        "shell_only",
+        "solid_created",
         "dense single-body gear heart",
     ),
     BenchmarkCase(

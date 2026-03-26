@@ -36,7 +36,7 @@ beyond the tiny golden fixtures in `tests/fixtures/`.
   - source: 3MF Consortium `3mf-samples`
   - license: BSD-2-Clause
   - feature focus: dense single-body gear geometry with repeated teeth
-  - current expected minimum outcome: `shell_only`
+  - current expected outcome: `solid_created`
 - `benchmark/cloudgripper/xy_rail_mount.stl`
   - source: CloudGripper Robot
   - license: MIT
