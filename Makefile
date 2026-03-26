@@ -1,15 +1,15 @@
 CXX ?= clang++
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -pedantic -Iinclude
-LDFLAGS ?=
+LDFLAGS ?= -lz
 
 SRC := src/main.cpp src/pipeline.cpp
-TARGET := build/stl2solid
+TARGET := build/mesh2solid
 
 .PHONY: all clean test golden
 
 all: $(TARGET)
 
-$(TARGET): $(SRC) include/stl2solid/pipeline.h | build
+$(TARGET): $(SRC) include/mesh2solid/pipeline.h | build
 	$(CXX) $(CXXFLAGS) $(SRC) $(LDFLAGS) -o $(TARGET)
 
 build:

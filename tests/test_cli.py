@@ -4,10 +4,11 @@ import subprocess
 import tempfile
 import unittest
 import difflib
+import zipfile
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-BIN_PATH = REPO_ROOT / "build" / "stl2solid"
+BIN_PATH = REPO_ROOT / "build" / "mesh2solid"
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
 GOLDEN_ROOT = REPO_ROOT / "tests" / "golden"
 
@@ -120,6 +121,73 @@ def write_ascii_stl(path: pathlib.Path, vertices, faces):
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_basic_3mf(path: pathlib.Path, vertices, faces, *, unit="millimeter", build_transform=None):
+    vertex_lines = [
+        f'          <vertex x="{x}" y="{y}" z="{z}" />'
+        for x, y, z in vertices
+    ]
+    triangle_lines = [
+        f'          <triangle v1="{a}" v2="{b}" v3="{c}" />'
+        for a, b, c in faces
+    ]
+    model_xml = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            f'<model unit="{unit}" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">',
+            "  <resources>",
+            '    <object id="1" type="model">',
+            "      <mesh>",
+            "        <vertices>",
+            *vertex_lines,
+            "        </vertices>",
+            "        <triangles>",
+            *triangle_lines,
+            "        </triangles>",
+            "      </mesh>",
+            "    </object>",
+            '    <object id="2" type="model">',
+            "      <components>",
+            '        <component objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 0" />',
+            "      </components>",
+            "    </object>",
+            "  </resources>",
+            "  <build>",
+            (
+                f'    <item objectid="2" transform="{build_transform}" />'
+                if build_transform is not None
+                else '    <item objectid="2" />'
+            ),
+            "  </build>",
+            "</model>",
+            "",
+        ]
+    )
+    content_types_xml = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+            '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />',
+            '  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />',
+            "</Types>",
+            "",
+        ]
+    )
+    relationships_xml = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+            '  <Relationship Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" Target="/3D/3dmodel.model" />',
+            "</Relationships>",
+            "",
+        ]
+    )
+
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("_rels/.rels", relationships_xml)
+        archive.writestr("3D/3dmodel.model", model_xml)
+
+
 def run_cli(input_mesh: pathlib.Path, out_dir: pathlib.Path):
     try:
         cli_input = input_mesh.relative_to(REPO_ROOT)
@@ -151,6 +219,10 @@ def run_cli(input_mesh: pathlib.Path, out_dir: pathlib.Path):
     regions = json.loads((out_dir / "regions.json").read_text(encoding="utf-8"))
     constraints = json.loads((out_dir / "constraints.json").read_text(encoding="utf-8"))
     return completed, report, regions, constraints
+
+
+def translated_mesh(vertices, dx=0.0, dy=0.0, dz=0.0):
+    return [(x + dx, y + dy, z + dz) for x, y, z in vertices]
 
 
 class CliIntegrationTests(unittest.TestCase):
@@ -254,6 +326,62 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
             self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
             self.assertEqual(report["reconstruction"]["omitted_region_ids"], [])
+
+    def test_generated_3mf_cube_matches_cube_baseline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "cube.3mf"
+            out_dir = tmp_path / "out"
+            vertices, faces = cube_mesh()
+            write_basic_3mf(mesh_path, vertices, faces)
+
+            _, report, regions, constraints = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["regions"]["count"], 6)
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["omitted_region_ids"], [])
+            self.assertEqual(len(regions["regions"]), 6)
+            self.assertIn("constraints", constraints)
+
+            cube_golden = GOLDEN_ROOT / "cube"
+            self.assert_file_matches_golden(out_dir / "cleaned_mesh.stl", cube_golden / "cleaned_mesh.stl")
+            self.assert_file_matches_golden(out_dir / "regions.json", cube_golden / "regions.json")
+            self.assert_file_matches_golden(out_dir / "constraints.json", cube_golden / "constraints.json")
+            self.assert_file_matches_golden(out_dir / "reconstruction.step", cube_golden / "reconstruction.step")
+
+    def test_generated_3mf_honors_units_and_build_transform(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "cube_inches.3mf"
+            stl_path = tmp_path / "expected_cube.stl"
+            out_dir = tmp_path / "out"
+            expected_out_dir = tmp_path / "expected_out"
+
+            inch_cube_vertices, faces = cube_mesh(size=1.0)
+            write_basic_3mf(
+                mesh_path,
+                inch_cube_vertices,
+                faces,
+                unit="inch",
+                build_transform="1 0 0 0 1 0 0 0 1 12.7 0 0",
+            )
+
+            expected_vertices = translated_mesh(cube_mesh(size=25.4)[0], dx=12.7)
+            write_ascii_stl(stl_path, expected_vertices, faces)
+
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+            _, expected_report, _, _ = run_cli(stl_path, expected_out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+            self.assertEqual(report["regions"]["count"], expected_report["regions"]["count"])
+            self.assert_file_matches_golden(out_dir / "cleaned_mesh.stl", expected_out_dir / "cleaned_mesh.stl")
+            self.assert_file_matches_golden(out_dir / "regions.json", expected_out_dir / "regions.json")
+            self.assert_file_matches_golden(out_dir / "constraints.json", expected_out_dir / "constraints.json")
+            self.assert_file_matches_golden(out_dir / "reconstruction.step", expected_out_dir / "reconstruction.step")
 
 
 if __name__ == "__main__":

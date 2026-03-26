@@ -1,12 +1,16 @@
-# `stl2solid`
+# `mesh2solid`
 
-`stl2solid` is a local STL-to-solid assistant aimed at mechanical, mostly planar parts.
+`mesh2solid` is a local mesh-to-solid assistant aimed at mechanical, mostly planar parts.
 It is built as a reusable C++ core with a CLI first, and keeps clear seams for a future
 Fusion 360 adapter and optional CGAL/Open CASCADE backends.
+
+The current MVP reads STL and core mesh `3MF`. The project name is broader because we want
+to keep expanding mesh inputs without renaming the core tool again later.
 
 ## Current MVP
 
 - Reads ASCII and binary STL.
+- Reads core mesh `3MF` packages with mesh objects, component references, build items, and unit scaling.
 - Repairs basic mesh issues:
   - vertex welding
   - duplicate/degenerate face removal
@@ -44,7 +48,8 @@ cmake --build build-cmake
 ## Usage
 
 ```bash
-build/stl2solid analyze part.stl --out out --preset mechanical --solid-threshold 0.75
+build/mesh2solid analyze part.stl --out out --preset mechanical --solid-threshold 0.75
+build/mesh2solid analyze part.3mf --out out --preset mechanical --solid-threshold 0.75
 ```
 
 ## Test Baseline
@@ -74,7 +79,7 @@ make golden
   - STEP and JSON emission
 - `src/main.cpp`
   - CLI surface
-- `include/stl2solid/pipeline.h`
+- `include/mesh2solid/pipeline.h`
   - public types and pipeline entrypoints
 
 ## Fusion 360 path

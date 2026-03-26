@@ -11,7 +11,7 @@ import tempfile
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-BIN_PATH = REPO_ROOT / "build" / "stl2solid"
+BIN_PATH = REPO_ROOT / "build" / "mesh2solid"
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
 GOLDEN_ROOT = REPO_ROOT / "tests" / "golden"
 

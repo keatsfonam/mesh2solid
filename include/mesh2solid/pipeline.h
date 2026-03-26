@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace stl2solid {
+namespace mesh2solid {
 
 struct Vec3 {
   double x {};
@@ -166,4 +166,4 @@ void write_outputs(const AnalyzeOptions& options, RunReport& report);
 std::string reconstruction_outcome_to_string(ReconstructionOutcome outcome);
 std::string constraint_type_to_string(ConstraintType type);
 
-}  // namespace stl2solid
+}  // namespace mesh2solid

@@ -1,4 +1,4 @@
-#include "stl2solid/pipeline.h"
+#include "mesh2solid/pipeline.h"
 
 #include <cstdlib>
 #include <exception>
@@ -11,7 +11,7 @@ namespace {
 void print_usage() {
   std::cerr
       << "Usage:\n"
-      << "  stl2solid analyze <input.stl> --out <dir> [--preset mechanical]"
+      << "  mesh2solid analyze <input-file> --out <dir> [--preset mechanical]"
       << " [--solid-threshold <0..1>]\n";
 }
 
@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    stl2solid::AnalyzeOptions options;
+    mesh2solid::AnalyzeOptions options;
     options.input_path = args[1];
 
     for (std::size_t i = 2; i < args.size(); ++i) {
@@ -70,14 +70,14 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    stl2solid::RunReport report = stl2solid::analyze(options);
-    stl2solid::write_outputs(options, report);
+    mesh2solid::RunReport report = mesh2solid::analyze(options);
+    mesh2solid::write_outputs(options, report);
 
     std::cout << "Analyzed: " << options.input_path << "\n";
     std::cout << "Backend: " << report.backend << "\n";
     std::cout << "Regions: " << report.regions.size() << "\n";
     std::cout << "Outcome: "
-              << stl2solid::reconstruction_outcome_to_string(report.reconstruction.outcome)
+              << mesh2solid::reconstruction_outcome_to_string(report.reconstruction.outcome)
               << "\n";
     if (!report.reconstruction.failure_reasons.empty()) {
       std::cout << "Notes:\n";
@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
     }
     return 0;
   } catch (const std::exception& error) {
-    std::cerr << "stl2solid failed: " << error.what() << "\n";
+    std::cerr << "mesh2solid failed: " << error.what() << "\n";
     return 1;
   }
 }
