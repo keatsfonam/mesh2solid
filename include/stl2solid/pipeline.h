@@ -116,6 +116,11 @@ struct ReconstructedFace {
   double confidence {};
 };
 
+struct RegionTopologyIssue {
+  int region_id {};
+  std::size_t edge_count {};
+};
+
 enum class ReconstructionOutcome {
   AnalysisOnly,
   ShellOnly,
@@ -127,6 +132,12 @@ struct ReconstructionResult {
   std::vector<Vec3> vertices;
   std::vector<ReconstructedFace> faces;
   std::vector<std::string> failure_reasons;
+  std::vector<int> skipped_region_ids;
+  std::size_t edge_split_insertions {};
+  std::size_t open_edge_count {};
+  std::size_t non_manifold_edge_count {};
+  std::vector<int> omitted_region_ids;
+  std::vector<RegionTopologyIssue> problematic_regions;
   double shell_gap_score {};
   double confidence {};
   bool step_written {};

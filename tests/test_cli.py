@@ -72,6 +72,40 @@ def open_cube_mesh():
     return vertices, faces[:-1]
 
 
+def beveled_cube_mesh(size=10.0, bevel=3.0):
+    vertices = [
+        (0.0, 0.0, 0.0),
+        (size, 0.0, 0.0),
+        (size, size, 0.0),
+        (0.0, size, 0.0),
+        (0.0, 0.0, size),
+        (size, 0.0, size),
+        (size, size - bevel, size),
+        (size, size, size - bevel),
+        (size - bevel, size, size),
+        (0.0, size, size),
+    ]
+    faces = [
+        (0, 2, 1),
+        (0, 3, 2),
+        (0, 9, 3),
+        (0, 4, 9),
+        (0, 5, 4),
+        (0, 1, 5),
+        (1, 5, 6),
+        (1, 6, 7),
+        (1, 7, 2),
+        (3, 2, 7),
+        (3, 7, 8),
+        (3, 8, 9),
+        (4, 9, 8),
+        (4, 8, 6),
+        (4, 6, 5),
+        (8, 6, 7),
+    ]
+    return vertices, faces
+
+
 def write_ascii_stl(path: pathlib.Path, vertices, faces):
     lines = ["solid fixture"]
     for a, b, c in faces:
@@ -204,6 +238,22 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertFalse((out_dir / "reconstruction.step").exists())
             combined_reasons = " ".join(report["reconstruction"]["failure_reasons"]).lower()
             self.assertIn("open", combined_reasons)
+
+    def test_tiny_beveled_corner_stays_solid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "beveled_cube.stl"
+            out_dir = tmp_path / "out"
+            vertices, faces = beveled_cube_mesh()
+            write_ascii_stl(mesh_path, vertices, faces)
+
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertTrue((out_dir / "reconstruction.step").exists())
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["omitted_region_ids"], [])
 
 
 if __name__ == "__main__":

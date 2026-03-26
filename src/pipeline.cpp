@@ -81,6 +81,10 @@ struct GridKeyHash {
   }
 };
 
+GridKey offset_grid_key(const GridKey& key, long long dx, long long dy, long long dz) {
+  return {key.x + dx, key.y + dy, key.z + dz};
+}
+
 struct TriangleEdgeOccurrence {
   int triangle {};
   int edge_index {};
@@ -341,6 +345,49 @@ double point_line_distance_2d(const Vec2& point, const Vec2& a, const Vec2& b) {
   }
   const double cross_value = std::abs((point.x - a.x) * dy - (point.y - a.y) * dx);
   return cross_value / std::sqrt(length_sq);
+}
+
+double point_segment_distance_3d(const Vec3& point, const Vec3& a, const Vec3& b, double& t) {
+  const Vec3 segment = b - a;
+  const double length_sq = length_squared(segment);
+  if (length_sq <= 1e-12) {
+    t = 0.0;
+    return length(point - a);
+  }
+  t = dot(point - a, segment) / length_sq;
+  const double clamped_t = clamp(t, 0.0, 1.0);
+  const Vec3 closest = a + segment * clamped_t;
+  return length(point - closest);
+}
+
+std::optional<int> find_nearby_grid_vertex(
+    const std::unordered_map<GridKey, std::vector<int>, GridKeyHash>& buckets,
+    const std::vector<Vec3>& vertices,
+    const GridKey& key,
+    const Vec3& point,
+    double epsilon) {
+  std::optional<int> best_index;
+  double best_distance = epsilon;
+
+  for (long long dx = -1; dx <= 1; ++dx) {
+    for (long long dy = -1; dy <= 1; ++dy) {
+      for (long long dz = -1; dz <= 1; ++dz) {
+        const auto bucket_it = buckets.find(offset_grid_key(key, dx, dy, dz));
+        if (bucket_it == buckets.end()) {
+          continue;
+        }
+        for (int candidate : bucket_it->second) {
+          const double distance = length(vertices[candidate] - point);
+          if (distance <= best_distance) {
+            best_distance = distance;
+            best_index = candidate;
+          }
+        }
+      }
+    }
+  }
+
+  return best_index;
 }
 
 PlaneBasis basis_from_normal(const Vec3& normal) {
@@ -672,8 +719,8 @@ std::size_t weld_vertices(MeshModel& mesh, double epsilon) {
       remap[index] = found->second;
     } else {
       const int canonical_index = static_cast<int>(welded.size());
-      canonical.emplace(key, canonical_index);
       welded.push_back(vertex);
+      canonical.emplace(key, canonical_index);
       remap[index] = canonical_index;
     }
   }
@@ -1385,7 +1432,17 @@ std::vector<int> simplify_loop(const std::vector<int>& loop,
       const Vec2 a = project_to_basis(vertices[previous], basis);
       const Vec2 b = project_to_basis(vertices[current], basis);
       const Vec2 c = project_to_basis(vertices[next], basis);
-      if (point_line_distance_2d(b, a, c) <= tolerance) {
+      const double previous_length = std::hypot(b.x - a.x, b.y - a.y);
+      const double next_length = std::hypot(c.x - b.x, c.y - b.y);
+      const double local_tolerance =
+          std::min(tolerance, std::min(previous_length, next_length) * 0.2);
+      const Vec2 ab {a.x - b.x, a.y - b.y};
+      const Vec2 cb {c.x - b.x, c.y - b.y};
+      const double straightness =
+          (ab.x * cb.x + ab.y * cb.y) / std::max(previous_length * next_length, 1e-12);
+      if (local_tolerance > 1e-9 &&
+          point_line_distance_2d(b, a, c) <= local_tolerance &&
+          straightness <= -0.995) {
         simplified.erase(simplified.begin() + static_cast<long>(index));
         changed = true;
         break;
@@ -1446,6 +1503,61 @@ int choose_next_edge(const std::vector<std::pair<int, int>>& edges,
     }
   }
   return best_index;
+}
+
+int choose_next_neighbor(const std::vector<int>& candidates,
+                         int previous,
+                         int current,
+                         const std::vector<Vec3>& vertices,
+                         const PlaneBasis& basis) {
+  if (candidates.empty()) {
+    return -1;
+  }
+  if (candidates.size() == 1) {
+    return candidates.front();
+  }
+
+  const Vec2 previous_point = project_to_basis(vertices[previous], basis);
+  const Vec2 current_point = project_to_basis(vertices[current], basis);
+  const Vec2 previous_direction {current_point.x - previous_point.x, current_point.y - previous_point.y};
+  const double previous_length = std::hypot(previous_direction.x, previous_direction.y);
+  if (previous_length <= 1e-12) {
+    return candidates.front();
+  }
+  const Vec2 normalized_previous {previous_direction.x / previous_length,
+                                  previous_direction.y / previous_length};
+
+  int best_vertex = candidates.front();
+  double best_turn = std::numeric_limits<double>::max();
+  for (int candidate : candidates) {
+    const Vec2 next_point = project_to_basis(vertices[candidate], basis);
+    Vec2 direction {next_point.x - current_point.x, next_point.y - current_point.y};
+    const double direction_length = std::hypot(direction.x, direction.y);
+    if (direction_length <= 1e-12) {
+      continue;
+    }
+    direction.x /= direction_length;
+    direction.y /= direction_length;
+
+    double turn = std::atan2(normalized_previous.x * direction.y - normalized_previous.y * direction.x,
+                             normalized_previous.x * direction.x + normalized_previous.y * direction.y);
+    if (turn <= 1e-9) {
+      turn += 2.0 * kPi;
+    }
+    if (turn < best_turn) {
+      best_turn = turn;
+      best_vertex = candidate;
+    }
+  }
+  return best_vertex;
+}
+
+std::size_t total_loop_edges(const std::vector<std::vector<int>>& loops) {
+  std::size_t total = 0;
+  for (const auto& loop : loops) {
+    total += loop.size();
+  }
+  return total;
 }
 
 std::vector<std::vector<int>> extract_loops_for_region(const std::vector<std::pair<int, int>>& edges,
@@ -1514,6 +1626,117 @@ std::vector<std::vector<int>> extract_loops_for_region(const std::vector<std::pa
   return loops;
 }
 
+std::vector<std::vector<int>> extract_loops_for_region_undirected(
+    const std::vector<std::pair<int, int>>& edges,
+    const std::vector<Vec3>& vertices,
+    const Vec3& normal,
+    double tolerance) {
+  std::vector<std::vector<int>> loops;
+  if (edges.empty()) {
+    return loops;
+  }
+
+  std::unordered_map<int, std::vector<int>> adjacency;
+  std::vector<EdgeKey> edge_keys;
+  edge_keys.reserve(edges.size());
+  for (const auto& [from, to] : edges) {
+    adjacency[from].push_back(to);
+    adjacency[to].push_back(from);
+    edge_keys.push_back(make_edge_key(from, to));
+  }
+
+  std::vector<bool> used(edge_keys.size(), false);
+  const PlaneBasis basis = basis_from_normal(normal);
+
+  auto try_walk = [&](int start_index, bool reverse_start) -> std::vector<int> {
+    std::vector<bool> local_used = used;
+    const int start = reverse_start ? edges[start_index].second : edges[start_index].first;
+    int previous = start;
+    int current = reverse_start ? edges[start_index].first : edges[start_index].second;
+    local_used[start_index] = true;
+
+    std::vector<int> loop;
+    loop.push_back(start);
+    int safety = 0;
+    while (true) {
+      if (++safety > static_cast<int>(edges.size()) + 4) {
+        return {};
+      }
+      loop.push_back(current);
+      if (current == start) {
+        loop.pop_back();
+        used = std::move(local_used);
+        return loop;
+      }
+
+      const auto adjacency_it = adjacency.find(current);
+      if (adjacency_it == adjacency.end()) {
+        return {};
+      }
+
+      std::vector<int> candidates;
+      for (int candidate : adjacency_it->second) {
+        if (candidate == current) {
+          continue;
+        }
+        const EdgeKey key = make_edge_key(current, candidate);
+        bool already_used = false;
+        for (std::size_t edge_index = 0; edge_index < edge_keys.size(); ++edge_index) {
+          if (edge_keys[edge_index] == key && local_used[edge_index]) {
+            already_used = true;
+            break;
+          }
+        }
+        if (!already_used) {
+          candidates.push_back(candidate);
+        }
+      }
+
+      const int next = choose_next_neighbor(candidates, previous, current, vertices, basis);
+      if (next < 0) {
+        return {};
+      }
+
+      bool marked = false;
+      const EdgeKey key = make_edge_key(current, next);
+      for (std::size_t edge_index = 0; edge_index < edge_keys.size(); ++edge_index) {
+        if (edge_keys[edge_index] == key && !local_used[edge_index]) {
+          local_used[edge_index] = true;
+          marked = true;
+          break;
+        }
+      }
+      if (!marked) {
+        return {};
+      }
+
+      previous = current;
+      current = next;
+    }
+  };
+
+  for (std::size_t edge_index = 0; edge_index < edges.size(); ++edge_index) {
+    if (used[edge_index]) {
+      continue;
+    }
+
+    std::vector<int> loop = try_walk(static_cast<int>(edge_index), false);
+    if (loop.size() < 3) {
+      loop = try_walk(static_cast<int>(edge_index), true);
+    }
+    if (loop.size() < 3) {
+      continue;
+    }
+
+    std::vector<int> simplified = simplify_loop(loop, vertices, normal, tolerance);
+    if (simplified.size() >= 3) {
+      loops.push_back(std::move(simplified));
+    }
+  }
+
+  return loops;
+}
+
 double polygon_area(const std::vector<int>& loop, const std::vector<Vec3>& vertices, const Vec3& normal) {
   const PlaneBasis basis = basis_from_normal(normal);
   std::vector<Vec2> projected;
@@ -1571,6 +1794,93 @@ void for_each_face_edge(const ReconstructedFace& face, Fn&& fn) {
   }
 }
 
+std::vector<int> refine_loop_with_shared_vertices(const std::vector<int>& loop,
+                                                  const std::vector<Vec3>& vertices,
+                                                  const std::vector<int>& candidate_vertices,
+                                                  double tolerance,
+                                                  std::size_t& insertion_count) {
+  if (loop.size() < 3) {
+    return loop;
+  }
+
+  std::vector<int> refined;
+  refined.reserve(loop.size() * 2);
+  const double endpoint_epsilon = std::max(tolerance * 0.5, 1e-8);
+
+  for (std::size_t index = 0; index < loop.size(); ++index) {
+    const int from = loop[index];
+    const int to = loop[(index + 1) % loop.size()];
+    refined.push_back(from);
+
+    std::vector<std::pair<double, int>> inserts;
+    inserts.reserve(4);
+    for (int candidate : candidate_vertices) {
+      if (candidate == from || candidate == to) {
+        continue;
+      }
+      double t = 0.0;
+      const double distance =
+          point_segment_distance_3d(vertices[candidate], vertices[from], vertices[to], t);
+      if (distance > tolerance || t <= endpoint_epsilon || t >= 1.0 - endpoint_epsilon) {
+        continue;
+      }
+      inserts.push_back({t, candidate});
+    }
+
+    std::sort(inserts.begin(), inserts.end(), [](const auto& lhs, const auto& rhs) {
+      if (std::abs(lhs.first - rhs.first) > 1e-9) {
+        return lhs.first < rhs.first;
+      }
+      return lhs.second < rhs.second;
+    });
+
+    int last_added = from;
+    double last_t = -1.0;
+    for (const auto& [t, candidate] : inserts) {
+      if (candidate == last_added || std::abs(t - last_t) <= 1e-9) {
+        continue;
+      }
+      refined.push_back(candidate);
+      ++insertion_count;
+      last_added = candidate;
+      last_t = t;
+    }
+  }
+
+  std::vector<int> compacted;
+  compacted.reserve(refined.size());
+  for (int vertex : refined) {
+    if (!compacted.empty() && compacted.back() == vertex) {
+      continue;
+    }
+    compacted.push_back(vertex);
+  }
+  if (compacted.size() >= 2 && compacted.front() == compacted.back()) {
+    compacted.pop_back();
+  }
+  return compacted.size() >= 3 ? compacted : loop;
+}
+
+void refine_face_loops_with_shared_vertices(std::vector<ReconstructedFace>& faces,
+                                            const std::vector<Vec3>& vertices,
+                                            double tolerance,
+                                            std::size_t& insertion_count) {
+  std::set<int> boundary_vertex_set;
+  for (const ReconstructedFace& face : faces) {
+    for (const auto& loop : face.loops) {
+      boundary_vertex_set.insert(loop.begin(), loop.end());
+    }
+  }
+  const std::vector<int> candidate_vertices {boundary_vertex_set.begin(), boundary_vertex_set.end()};
+
+  for (ReconstructedFace& face : faces) {
+    for (std::vector<int>& loop : face.loops) {
+      loop = refine_loop_with_shared_vertices(loop, vertices, candidate_vertices, tolerance,
+                                              insertion_count);
+    }
+  }
+}
+
 double signed_loop_volume(const std::vector<int>& loop, const std::vector<Vec3>& vertices) {
   if (loop.size() < 3) {
     return 0.0;
@@ -1623,9 +1933,10 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
   }
 
   std::vector<int> original_to_snapped(mesh.vertices.size(), -1);
-  std::unordered_map<GridKey, int, GridKeyHash> snapped_lookup;
-  auto quantize = [tolerances](double value) -> long long {
-    return static_cast<long long>(std::llround(value / std::max(tolerances.collinear_distance, 1e-7)));
+  std::unordered_map<GridKey, std::vector<int>, GridKeyHash> snapped_lookup;
+  const double snap_weld_tolerance = std::max(tolerances.collinear_distance * 3.0, 1e-7);
+  auto quantize = [snap_weld_tolerance](double value) -> long long {
+    return static_cast<long long>(std::llround(value / snap_weld_tolerance));
   };
 
   for (std::size_t vertex_index = 0; vertex_index < mesh.vertices.size(); ++vertex_index) {
@@ -1635,14 +1946,14 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
                                                regions);
     }
     const GridKey key {quantize(snapped.x), quantize(snapped.y), quantize(snapped.z)};
-    const auto found = snapped_lookup.find(key);
-    if (found != snapped_lookup.end() &&
-        length(result.vertices[found->second] - snapped) <= tolerances.collinear_distance * 2.0) {
-      original_to_snapped[vertex_index] = found->second;
+    const std::optional<int> found =
+        find_nearby_grid_vertex(snapped_lookup, result.vertices, key, snapped, snap_weld_tolerance);
+    if (found.has_value()) {
+      original_to_snapped[vertex_index] = *found;
     } else {
       const int snapped_index = static_cast<int>(result.vertices.size());
       result.vertices.push_back(snapped);
-      snapped_lookup.emplace(key, snapped_index);
+      snapped_lookup[key].push_back(snapped_index);
       original_to_snapped[vertex_index] = snapped_index;
     }
   }
@@ -1669,12 +1980,22 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
   for (const PlaneRegion& region : regions) {
     const auto edges_it = boundary_edges.find(region.id);
     if (edges_it == boundary_edges.end()) {
+      result.omitted_region_ids.push_back(region.id);
       continue;
     }
     std::vector<std::vector<int>> loops =
         extract_loops_for_region(edges_it->second, result.vertices, region.fit.normal,
                                  tolerances.collinear_distance);
+    if (total_loop_edges(loops) < edges_it->second.size()) {
+      std::vector<std::vector<int>> fallback_loops =
+          extract_loops_for_region_undirected(edges_it->second, result.vertices, region.fit.normal,
+                                              tolerances.collinear_distance);
+      if (total_loop_edges(fallback_loops) > total_loop_edges(loops)) {
+        loops = std::move(fallback_loops);
+      }
+    }
     if (loops.empty()) {
+      result.omitted_region_ids.push_back(region.id);
       continue;
     }
 
@@ -1698,6 +2019,8 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
     face.confidence = region.fit.confidence;
     if (face.loops.front().size() >= 3) {
       result.faces.push_back(std::move(face));
+    } else {
+      result.omitted_region_ids.push_back(region.id);
     }
   }
 
@@ -1707,23 +2030,64 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
     return result;
   }
 
+  refine_face_loops_with_shared_vertices(result.faces, result.vertices, tolerances.collinear_distance,
+                                         result.edge_split_insertions);
+  for (ReconstructedFace& face : result.faces) {
+    if (face.loops.empty()) {
+      continue;
+    }
+    orient_loop_to_sign(face.loops.front(), result.vertices, face.fit.normal, 1.0);
+    for (std::size_t loop_index = 1; loop_index < face.loops.size(); ++loop_index) {
+      orient_loop_to_sign(face.loops[loop_index], result.vertices, face.fit.normal, -1.0);
+    }
+    face.area = face_total_area(face, result.vertices, face.fit.normal);
+  }
+
   std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_use_count;
+  std::unordered_map<EdgeKey, std::vector<int>, EdgeKeyHash> edge_regions;
   for (const ReconstructedFace& face : result.faces) {
     for_each_face_edge(face, [&](int from, int to) {
-      ++edge_use_count[make_edge_key(from, to)];
+      const EdgeKey key = make_edge_key(from, to);
+      ++edge_use_count[key];
+      edge_regions[key].push_back(face.region_id);
     });
   }
 
   std::size_t open_shell_edges = 0;
+  std::size_t non_manifold_shell_edges = 0;
+  std::unordered_map<int, std::size_t> problematic_region_counts;
   for (const auto& [edge_key, count] : edge_use_count) {
-    (void)edge_key;
-    if (count != 2) {
+    if (count == 1) {
       ++open_shell_edges;
+      for (int region_id : edge_regions[edge_key]) {
+        ++problematic_region_counts[region_id];
+      }
+    } else if (count != 2) {
+      ++non_manifold_shell_edges;
+      for (int region_id : edge_regions[edge_key]) {
+        ++problematic_region_counts[region_id];
+      }
     }
   }
+  result.open_edge_count = open_shell_edges;
+  result.non_manifold_edge_count = non_manifold_shell_edges;
+  result.problematic_regions.clear();
+  result.problematic_regions.reserve(problematic_region_counts.size());
+  for (const auto& [region_id, edge_count] : problematic_region_counts) {
+    result.problematic_regions.push_back({region_id, edge_count});
+  }
+  std::sort(result.problematic_regions.begin(), result.problematic_regions.end(),
+            [](const RegionTopologyIssue& lhs, const RegionTopologyIssue& rhs) {
+              if (lhs.edge_count != rhs.edge_count) {
+                return lhs.edge_count > rhs.edge_count;
+              }
+              return lhs.region_id < rhs.region_id;
+            });
   result.shell_gap_score =
-      edge_use_count.empty() ? 1.0
-                             : static_cast<double>(open_shell_edges) / static_cast<double>(edge_use_count.size());
+      edge_use_count.empty()
+          ? 1.0
+          : static_cast<double>(open_shell_edges + non_manifold_shell_edges) /
+                static_cast<double>(edge_use_count.size());
 
   result.confidence = 0.0;
   for (const ReconstructedFace& face : result.faces) {
@@ -1731,7 +2095,7 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
   }
   result.confidence /= static_cast<double>(result.faces.size());
 
-  if (open_shell_edges > 0) {
+  if (open_shell_edges > 0 || non_manifold_shell_edges > 0) {
     result.failure_reasons.push_back("Reconstructed shell is open or topologically inconsistent");
   }
   if (result.faces.size() < 4) {
@@ -1744,7 +2108,7 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
     result.failure_reasons.push_back("Reconstructed shell volume is too small or inconsistent");
   }
 
-  if (open_shell_edges == 0 && result.faces.size() >= 4 &&
+  if (open_shell_edges == 0 && non_manifold_shell_edges == 0 && result.faces.size() >= 4 &&
       volume > min_volume && result.confidence >= solid_threshold) {
     result.outcome = ReconstructionOutcome::SolidCreated;
   } else if (!result.faces.empty()) {
@@ -2122,6 +2486,26 @@ std::string report_json(const RunReport& report, const AnalyzeOptions& options) 
          << escape_json(reconstruction_outcome_to_string(report.reconstruction.outcome)) << "\",\n";
   output << "    \"face_count\": " << report.reconstruction.faces.size() << ",\n";
   output << "    \"vertex_count\": " << report.reconstruction.vertices.size() << ",\n";
+  output << "    \"edge_split_insertions\": " << report.reconstruction.edge_split_insertions << ",\n";
+  output << "    \"open_edge_count\": " << report.reconstruction.open_edge_count << ",\n";
+  output << "    \"non_manifold_edge_count\": " << report.reconstruction.non_manifold_edge_count << ",\n";
+  output << "    \"omitted_region_ids\": [";
+  for (std::size_t index = 0; index < report.reconstruction.omitted_region_ids.size(); ++index) {
+    if (index > 0) {
+      output << ",";
+    }
+    output << report.reconstruction.omitted_region_ids[index];
+  }
+  output << "],\n";
+  output << "    \"problematic_regions\": [";
+  for (std::size_t index = 0; index < report.reconstruction.problematic_regions.size(); ++index) {
+    if (index > 0) {
+      output << ",";
+    }
+    const RegionTopologyIssue& issue = report.reconstruction.problematic_regions[index];
+    output << "{\"region_id\":" << issue.region_id << ",\"edge_count\":" << issue.edge_count << "}";
+  }
+  output << "],\n";
   output << "    \"shell_gap_score\": " << format_double(report.reconstruction.shell_gap_score) << ",\n";
   output << "    \"confidence\": " << format_double(report.reconstruction.confidence) << ",\n";
   output << "    \"step_written\": " << bool_json(report.reconstruction.step_written) << ",\n";
