@@ -3364,6 +3364,50 @@ void for_each_face_edge(const ReconstructedFace& face, Fn&& fn) {
   }
 }
 
+std::vector<int> sanitize_loop_indices(std::vector<int> loop) {
+  if (loop.size() < 3) {
+    return {};
+  }
+  if (loop.size() >= 2 && loop.front() == loop.back()) {
+    loop.pop_back();
+  }
+
+  bool changed = true;
+  while (changed && loop.size() >= 3) {
+    changed = false;
+
+    std::vector<int> compacted;
+    compacted.reserve(loop.size());
+    for (int vertex : loop) {
+      if (!compacted.empty() && compacted.back() == vertex) {
+        changed = true;
+        continue;
+      }
+      compacted.push_back(vertex);
+    }
+    if (compacted.size() >= 2 && compacted.front() == compacted.back()) {
+      compacted.pop_back();
+      changed = true;
+    }
+    loop = std::move(compacted);
+    if (loop.size() < 3) {
+      break;
+    }
+
+    for (std::size_t index = 0; index < loop.size(); ++index) {
+      const int previous = loop[(index + loop.size() - 1) % loop.size()];
+      const int next = loop[(index + 1) % loop.size()];
+      if (previous == next) {
+        loop.erase(loop.begin() + static_cast<long>(index));
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  return loop.size() >= 3 ? loop : std::vector<int> {};
+}
+
 std::vector<int> refine_loop_with_shared_vertices(const std::vector<int>& loop,
                                                   const std::vector<Vec3>& vertices,
                                                   const std::vector<int>& candidate_vertices,
@@ -3428,6 +3472,8 @@ std::vector<int> refine_loop_with_shared_vertices(const std::vector<int>& loop,
   if (compacted.size() >= 2 && compacted.front() == compacted.back()) {
     compacted.pop_back();
   }
+
+  compacted = sanitize_loop_indices(std::move(compacted));
   return compacted.size() >= 3 ? compacted : loop;
 }
 
@@ -3448,6 +3494,20 @@ void refine_face_loops_with_shared_vertices(std::vector<ReconstructedFace>& face
       loop = refine_loop_with_shared_vertices(loop, vertices, candidate_vertices, tolerance,
                                               insertion_count);
     }
+  }
+}
+
+void sanitize_face_loops(std::vector<ReconstructedFace>& faces) {
+  for (ReconstructedFace& face : faces) {
+    std::vector<std::vector<int>> sanitized;
+    sanitized.reserve(face.loops.size());
+    for (std::vector<int>& loop : face.loops) {
+      std::vector<int> cleaned = sanitize_loop_indices(std::move(loop));
+      if (cleaned.size() >= 3) {
+        sanitized.push_back(std::move(cleaned));
+      }
+    }
+    face.loops = std::move(sanitized);
   }
 }
 
@@ -3660,6 +3720,7 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
       std::min(bounds_diagonal(mesh.bounds) * bounds_diagonal(mesh.bounds) * 0.015,
                tolerances.plane_distance * tolerances.plane_distance * 40.0);
   add_small_planar_gap_caps(result.faces, result.vertices, tolerances, shell_cap_area_limit);
+  sanitize_face_loops(result.faces);
 
   std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_use_count;
   std::unordered_map<EdgeKey, std::vector<int>, EdgeKeyHash> edge_regions;

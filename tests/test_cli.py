@@ -55,16 +55,22 @@ BENCHMARK_CASES = {
         "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "xy_nema_bracket.stl",
         "expected_outcome": "shell_only",
         "min_regions": 25,
+        "max_open_edges": 60,
+        "max_non_manifold_edges": 0,
     },
     "cloudgripper_arm_linear_pinion_gear": {
         "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "arm_linear_pinion_gear.stl",
         "expected_outcome": "shell_only",
         "min_regions": 25,
+        "max_open_edges": 4,
+        "max_non_manifold_edges": 2,
     },
     "bcn3d_moveo_t4m1e": {
         "path": EXAMPLES_DIR / "benchmark" / "bcn3d_moveo" / "t4m1e.stl",
         "expected_outcome": "shell_only",
         "min_regions": 25,
+        "max_open_edges": 63,
+        "max_non_manifold_edges": 0,
     },
 }
 
@@ -471,6 +477,16 @@ class CliIntegrationTests(unittest.TestCase):
                             report["reconstruction"]["open_edge_count"] > 0
                             or report["reconstruction"]["non_manifold_edge_count"] > 0
                         )
+                        if "max_open_edges" in case:
+                            self.assertLessEqual(
+                                report["reconstruction"]["open_edge_count"],
+                                case["max_open_edges"],
+                            )
+                        if "max_non_manifold_edges" in case:
+                            self.assertLessEqual(
+                                report["reconstruction"]["non_manifold_edge_count"],
+                                case["max_non_manifold_edges"],
+                            )
 
 
 if __name__ == "__main__":
