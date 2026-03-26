@@ -1,0 +1,226 @@
+solid fixture
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 0.0 0.0
+      vertex 0.0 0.0 10.0
+      vertex 20.0 0.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 0.0 0.0
+      vertex 20.0 0.0 10.0
+      vertex 20.0 0.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 0.0 0.0
+      vertex 20.0 0.0 10.0
+      vertex 20.0 20.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 0.0 0.0
+      vertex 20.0 20.0 10.0
+      vertex 20.0 20.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 20.0 0.0
+      vertex 20.0 20.0 10.0
+      vertex 0.0 20.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 20.0 0.0
+      vertex 0.0 20.0 10.0
+      vertex 0.0 20.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 20.0 0.0
+      vertex 0.0 20.0 10.0
+      vertex 0.0 0.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 20.0 0.0
+      vertex 0.0 0.0 10.0
+      vertex 0.0 0.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 6.0 6.0 0.0
+      vertex 14.0 6.0 0.0
+      vertex 14.0 6.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 6.0 6.0 0.0
+      vertex 14.0 6.0 10.0
+      vertex 6.0 6.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 14.0 6.0 0.0
+      vertex 14.0 14.0 0.0
+      vertex 14.0 14.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 14.0 6.0 0.0
+      vertex 14.0 14.0 10.0
+      vertex 14.0 6.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 14.0 14.0 0.0
+      vertex 6.0 14.0 0.0
+      vertex 6.0 14.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 14.0 14.0 0.0
+      vertex 6.0 14.0 10.0
+      vertex 14.0 14.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 6.0 14.0 0.0
+      vertex 6.0 6.0 0.0
+      vertex 6.0 6.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 6.0 14.0 0.0
+      vertex 6.0 6.0 10.0
+      vertex 6.0 14.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 0.0 0.0
+      vertex 20.0 0.0 0.0
+      vertex 14.0 6.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 0.0 0.0
+      vertex 14.0 6.0 0.0
+      vertex 6.0 6.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 0.0 0.0
+      vertex 20.0 20.0 0.0
+      vertex 14.0 14.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 0.0 0.0
+      vertex 14.0 14.0 0.0
+      vertex 14.0 6.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 20.0 0.0
+      vertex 0.0 20.0 0.0
+      vertex 6.0 14.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 20.0 0.0
+      vertex 6.0 14.0 0.0
+      vertex 14.0 14.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 20.0 0.0
+      vertex 0.0 0.0 0.0
+      vertex 6.0 6.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 20.0 0.0
+      vertex 6.0 6.0 0.0
+      vertex 6.0 14.0 0.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 0.0 10.0
+      vertex 6.0 6.0 10.0
+      vertex 14.0 6.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 0.0 10.0
+      vertex 14.0 6.0 10.0
+      vertex 20.0 0.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 0.0 10.0
+      vertex 14.0 6.0 10.0
+      vertex 14.0 14.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 0.0 10.0
+      vertex 14.0 14.0 10.0
+      vertex 20.0 20.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 20.0 10.0
+      vertex 14.0 14.0 10.0
+      vertex 6.0 14.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 20.0 20.0 10.0
+      vertex 6.0 14.0 10.0
+      vertex 0.0 20.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 20.0 10.0
+      vertex 6.0 14.0 10.0
+      vertex 6.0 6.0 10.0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.0 20.0 10.0
+      vertex 6.0 6.0 10.0
+      vertex 0.0 0.0 10.0
+    endloop
+  endfacet
+endsolid fixture

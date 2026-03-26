@@ -49,7 +49,8 @@ build/stl2solid analyze part.stl --out out --preset mechanical --solid-threshold
 
 ## Test Baseline
 
-The repo includes checked-in planar fixtures and exact golden outputs under `tests/golden/`.
+The repo includes checked-in planar fixtures, including a through-hole tube, and exact golden
+outputs under `tests/golden/`.
 
 Refresh the golden baseline with:
 

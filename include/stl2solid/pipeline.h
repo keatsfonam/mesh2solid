@@ -111,7 +111,7 @@ struct ConstraintGraph {
 struct ReconstructedFace {
   int region_id {};
   PlaneFit fit;
-  std::vector<int> vertex_ids;
+  std::vector<std::vector<int>> loops;
   double area {};
   double confidence {};
 };
@@ -156,4 +156,3 @@ std::string reconstruction_outcome_to_string(ReconstructionOutcome outcome);
 std::string constraint_type_to_string(ConstraintType type);
 
 }  // namespace stl2solid
-

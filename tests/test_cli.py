@@ -12,10 +12,15 @@ FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
 GOLDEN_ROOT = REPO_ROOT / "tests" / "golden"
 
 GOLDEN_CASES = {
-    "cube": {"fixture": "cube.stl", "min_regions": 6},
-    "rectangular_box": {"fixture": "rectangular_box.stl", "min_regions": 6},
-    "sloped_block": {"fixture": "sloped_block.stl", "min_regions": 6},
-    "triangular_prism": {"fixture": "triangular_prism.stl", "min_regions": 5},
+    "cube": {"fixture": "cube.stl", "min_regions": 6, "step_tokens": []},
+    "rectangular_box": {"fixture": "rectangular_box.stl", "min_regions": 6, "step_tokens": []},
+    "sloped_block": {"fixture": "sloped_block.stl", "min_regions": 6, "step_tokens": []},
+    "triangular_prism": {"fixture": "triangular_prism.stl", "min_regions": 5, "step_tokens": []},
+    "rectangular_tube": {
+        "fixture": "rectangular_tube.stl",
+        "min_regions": 10,
+        "step_tokens": ["FACE_BOUND"],
+    },
 }
 
 
@@ -162,6 +167,8 @@ class CliIntegrationTests(unittest.TestCase):
                     self.assertIn("ADVANCED_FACE", step_text)
                     self.assertIn("MANIFOLD_SOLID_BREP", step_text)
                     self.assertNotIn("FACETED_BREP", step_text)
+                    for token in case["step_tokens"]:
+                        self.assertIn(token, step_text)
 
                     self.assert_file_matches_golden(out_dir / "cleaned_mesh.stl", golden_dir / "cleaned_mesh.stl")
                     self.assert_file_matches_golden(out_dir / "report.json", golden_dir / "report.json")

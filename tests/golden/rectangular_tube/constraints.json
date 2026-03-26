@@ -1,0 +1,196 @@
+{
+  "constraints": [
+    {
+      "region_a": 0,
+      "region_b": 1,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.98928571,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 0,
+      "region_b": 3,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.98928571,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 0,
+      "region_b": 4,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.99464286,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 0,
+      "region_b": 5,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.99464286,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 1,
+      "region_b": 2,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.98928571,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 1,
+      "region_b": 4,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.99464286,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 1,
+      "region_b": 5,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.99464286,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 2,
+      "region_b": 3,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.98928571,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 2,
+      "region_b": 4,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.99464286,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 2,
+      "region_b": 5,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.99464286,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 3,
+      "region_b": 4,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.99464286,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 3,
+      "region_b": 5,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.99464286,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 4,
+      "region_b": 6,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.96785714,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 4,
+      "region_b": 7,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.96785714,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 4,
+      "region_b": 8,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.96785714,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 4,
+      "region_b": 9,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.96785714,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 5,
+      "region_b": 6,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.96785714,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 5,
+      "region_b": 7,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.96785714,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 5,
+      "region_b": 8,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.96785714,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 5,
+      "region_b": 9,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.96785714,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 6,
+      "region_b": 7,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.93571429,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 6,
+      "region_b": 9,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.93571429,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 7,
+      "region_b": 8,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.93571429,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    },
+    {
+      "region_a": 8,
+      "region_b": 9,
+      "type": "perpendicular",
+      "applied": true,
+      "score": 0.93571429,
+      "rationale": "Snapped lower-confidence plane normal to perpendicular anchor"
+    }
+  ]
+}

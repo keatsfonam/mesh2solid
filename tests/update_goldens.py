@@ -64,6 +64,18 @@ FIXTURE_CONFIG = {
             "reconstruction.step",
         ],
     },
+    "rectangular_tube": {
+        "input": pathlib.Path("tests/fixtures/rectangular_tube.stl"),
+        "preset": "mechanical",
+        "solid_threshold": "0.60",
+        "outputs": [
+            "cleaned_mesh.stl",
+            "report.json",
+            "regions.json",
+            "constraints.json",
+            "reconstruction.step",
+        ],
+    },
 }
 
 

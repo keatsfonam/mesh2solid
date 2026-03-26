@@ -1506,14 +1506,6 @@ std::vector<std::vector<int>> extract_loops_for_region(const std::vector<std::pa
     if (loop.size() >= 3) {
       std::vector<int> simplified = simplify_loop(loop, vertices, normal, tolerance);
       if (simplified.size() >= 3) {
-        std::vector<Vec2> projected;
-        projected.reserve(simplified.size());
-        for (int vertex : simplified) {
-          projected.push_back(project_to_basis(vertices[vertex], basis));
-        }
-        if (signed_area_2d(projected) < 0.0) {
-          std::reverse(simplified.begin(), simplified.end());
-        }
         loops.push_back(std::move(simplified));
       }
     }
@@ -1532,18 +1524,77 @@ double polygon_area(const std::vector<int>& loop, const std::vector<Vec3>& verti
   return std::abs(signed_area_2d(projected));
 }
 
+double signed_polygon_area(const std::vector<int>& loop,
+                           const std::vector<Vec3>& vertices,
+                           const Vec3& normal) {
+  const PlaneBasis basis = basis_from_normal(normal);
+  std::vector<Vec2> projected;
+  projected.reserve(loop.size());
+  for (int vertex : loop) {
+    projected.push_back(project_to_basis(vertices[vertex], basis));
+  }
+  return signed_area_2d(projected);
+}
+
+void orient_loop_to_sign(std::vector<int>& loop,
+                         const std::vector<Vec3>& vertices,
+                         const Vec3& normal,
+                         double target_sign) {
+  if (loop.size() < 3) {
+    return;
+  }
+  const double area = signed_polygon_area(loop, vertices, normal);
+  if ((area < 0.0 && target_sign > 0.0) || (area > 0.0 && target_sign < 0.0)) {
+    std::reverse(loop.begin(), loop.end());
+  }
+}
+
+double face_total_area(const ReconstructedFace& face,
+                       const std::vector<Vec3>& vertices,
+                       const Vec3& normal) {
+  if (face.loops.empty()) {
+    return 0.0;
+  }
+  double total = polygon_area(face.loops.front(), vertices, normal);
+  for (std::size_t index = 1; index < face.loops.size(); ++index) {
+    total -= polygon_area(face.loops[index], vertices, normal);
+  }
+  return std::max(total, 0.0);
+}
+
+template <typename Fn>
+void for_each_face_edge(const ReconstructedFace& face, Fn&& fn) {
+  for (const auto& loop : face.loops) {
+    for (std::size_t index = 0; index < loop.size(); ++index) {
+      fn(loop[index], loop[(index + 1) % loop.size()]);
+    }
+  }
+}
+
+double signed_loop_volume(const std::vector<int>& loop, const std::vector<Vec3>& vertices) {
+  if (loop.size() < 3) {
+    return 0.0;
+  }
+  double volume = 0.0;
+  const Vec3& a = vertices[loop[0]];
+  for (std::size_t index = 1; index + 1 < loop.size(); ++index) {
+    const Vec3& b = vertices[loop[index]];
+    const Vec3& c = vertices[loop[index + 1]];
+    volume += dot(a, cross(b, c)) / 6.0;
+  }
+  return volume;
+}
+
 double signed_polyhedron_volume(const std::vector<ReconstructedFace>& faces,
                                 const std::vector<Vec3>& vertices) {
   double volume = 0.0;
   for (const ReconstructedFace& face : faces) {
-    if (face.vertex_ids.size() < 3) {
+    if (face.loops.empty()) {
       continue;
     }
-    const Vec3& a = vertices[face.vertex_ids[0]];
-    for (std::size_t index = 1; index + 1 < face.vertex_ids.size(); ++index) {
-      const Vec3& b = vertices[face.vertex_ids[index]];
-      const Vec3& c = vertices[face.vertex_ids[index + 1]];
-      volume += dot(a, cross(b, c)) / 6.0;
+    for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
+      const double contribution = signed_loop_volume(face.loops[loop_index], vertices);
+      volume += contribution;
     }
   }
   return volume;
@@ -1615,7 +1666,6 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
     }
   }
 
-  bool unsupported_holes = false;
   for (const PlaneRegion& region : regions) {
     const auto edges_it = boundary_edges.find(region.id);
     if (edges_it == boundary_edges.end()) {
@@ -1633,17 +1683,20 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
              polygon_area(rhs, result.vertices, region.fit.normal);
     });
 
-    if (loops.size() > 1) {
-      unsupported_holes = true;
-    }
-
     ReconstructedFace face;
     face.region_id = region.id;
     face.fit = region.fit;
-    face.vertex_ids = loops.front();
-    face.area = polygon_area(face.vertex_ids, result.vertices, region.fit.normal);
+    face.loops = std::move(loops);
+    if (face.loops.empty()) {
+      continue;
+    }
+    orient_loop_to_sign(face.loops.front(), result.vertices, region.fit.normal, 1.0);
+    for (std::size_t loop_index = 1; loop_index < face.loops.size(); ++loop_index) {
+      orient_loop_to_sign(face.loops[loop_index], result.vertices, region.fit.normal, -1.0);
+    }
+    face.area = face_total_area(face, result.vertices, region.fit.normal);
     face.confidence = region.fit.confidence;
-    if (face.vertex_ids.size() >= 3) {
+    if (face.loops.front().size() >= 3) {
       result.faces.push_back(std::move(face));
     }
   }
@@ -1656,11 +1709,9 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
 
   std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_use_count;
   for (const ReconstructedFace& face : result.faces) {
-    for (std::size_t index = 0; index < face.vertex_ids.size(); ++index) {
-      const int from = face.vertex_ids[index];
-      const int to = face.vertex_ids[(index + 1) % face.vertex_ids.size()];
+    for_each_face_edge(face, [&](int from, int to) {
       ++edge_use_count[make_edge_key(from, to)];
-    }
+    });
   }
 
   std::size_t open_shell_edges = 0;
@@ -1680,9 +1731,6 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
   }
   result.confidence /= static_cast<double>(result.faces.size());
 
-  if (unsupported_holes) {
-    result.failure_reasons.push_back("Detected faces with multiple boundary loops; holes are not exported in v1");
-  }
   if (open_shell_edges > 0) {
     result.failure_reasons.push_back("Reconstructed shell is open or topologically inconsistent");
   }
@@ -1696,7 +1744,7 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
     result.failure_reasons.push_back("Reconstructed shell volume is too small or inconsistent");
   }
 
-  if (open_shell_edges == 0 && !unsupported_holes && result.faces.size() >= 4 &&
+  if (open_shell_edges == 0 && result.faces.size() >= 4 &&
       volume > min_volume && result.confidence >= solid_threshold) {
     result.outcome = ReconstructionOutcome::SolidCreated;
   } else if (!result.faces.empty()) {
@@ -1847,25 +1895,42 @@ bool write_step_file(const std::filesystem::path& path, const ReconstructionResu
                               step.ref(face_normal) + "," + step.ref(face_ref) + ")");
     const int plane = step.add("PLANE(''," + step.ref(axis) + ")");
 
-    std::ostringstream edge_refs;
-    for (std::size_t index = 0; index < face.vertex_ids.size(); ++index) {
-      const int from = face.vertex_ids[index];
-      const int to = face.vertex_ids[(index + 1) % face.vertex_ids.size()];
-      const int edge_curve_id = get_edge_curve_id(from, to);
-      const EdgeKey key = make_edge_key(from, to);
-      const bool same_orientation = key.a == from && key.b == to;
-      const int oriented_edge_id =
-          step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
-                   std::string(same_orientation ? ".T." : ".F.") + ")");
-      if (index > 0) {
-        edge_refs << ",";
+    std::vector<int> bound_ids;
+    bound_ids.reserve(face.loops.size());
+    for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
+      const auto& loop = face.loops[loop_index];
+      std::ostringstream edge_refs;
+      for (std::size_t index = 0; index < loop.size(); ++index) {
+        const int from = loop[index];
+        const int to = loop[(index + 1) % loop.size()];
+        const int edge_curve_id = get_edge_curve_id(from, to);
+        const EdgeKey key = make_edge_key(from, to);
+        const bool same_orientation = key.a == from && key.b == to;
+        const int oriented_edge_id =
+            step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
+                     std::string(same_orientation ? ".T." : ".F.") + ")");
+        if (index > 0) {
+          edge_refs << ",";
+        }
+        edge_refs << step.ref(oriented_edge_id);
       }
-      edge_refs << step.ref(oriented_edge_id);
+      const int edge_loop = step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
+      if (loop_index == 0) {
+        bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
+      } else {
+        bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
+      }
     }
-    const int edge_loop = step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
-    const int outer_bound = step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)");
+
+    std::ostringstream bound_refs;
+    for (std::size_t index = 0; index < bound_ids.size(); ++index) {
+      if (index > 0) {
+        bound_refs << ",";
+      }
+      bound_refs << step.ref(bound_ids[index]);
+    }
     const int advanced_face =
-        step.add("ADVANCED_FACE('',(" + step.ref(outer_bound) + ")," + step.ref(plane) + ",.T.)");
+        step.add("ADVANCED_FACE('',(" + bound_refs.str() + ")," + step.ref(plane) + ",.T.)");
     face_ids.push_back(advanced_face);
   }
 
