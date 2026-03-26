@@ -27,7 +27,43 @@ FIXTURE_CONFIG = {
             "constraints.json",
             "reconstruction.step",
         ],
-    }
+    },
+    "rectangular_box": {
+        "input": pathlib.Path("tests/fixtures/rectangular_box.stl"),
+        "preset": "mechanical",
+        "solid_threshold": "0.60",
+        "outputs": [
+            "cleaned_mesh.stl",
+            "report.json",
+            "regions.json",
+            "constraints.json",
+            "reconstruction.step",
+        ],
+    },
+    "sloped_block": {
+        "input": pathlib.Path("tests/fixtures/sloped_block.stl"),
+        "preset": "mechanical",
+        "solid_threshold": "0.60",
+        "outputs": [
+            "cleaned_mesh.stl",
+            "report.json",
+            "regions.json",
+            "constraints.json",
+            "reconstruction.step",
+        ],
+    },
+    "triangular_prism": {
+        "input": pathlib.Path("tests/fixtures/triangular_prism.stl"),
+        "preset": "mechanical",
+        "solid_threshold": "0.60",
+        "outputs": [
+            "cleaned_mesh.stl",
+            "report.json",
+            "regions.json",
+            "constraints.json",
+            "reconstruction.step",
+        ],
+    },
 }
 
 

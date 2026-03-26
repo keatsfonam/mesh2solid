@@ -1,0 +1,84 @@
+{
+  "regions": [
+    {
+      "id": 0,
+      "triangle_count": 2,
+      "vertex_count": 4,
+      "area": 309.68370961,
+      "unresolved": false,
+      "fit": {
+        "normal": [0.58123819,0.81373347,0.00000000],
+        "centroid": [7.00000000,5.00000000,9.00000000],
+        "d": -8.13733471,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 1.00000000
+      },
+      "neighbors": [1,2,3,4]
+    },
+    {
+      "id": 1,
+      "triangle_count": 2,
+      "vertex_count": 4,
+      "area": 252.00000000,
+      "unresolved": false,
+      "fit": {
+        "normal": [-0.00000000,-1.00000000,-0.00000000],
+        "centroid": [7.00000000,0.00000000,9.00000000],
+        "d": 0.00000000,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 1.00000000
+      },
+      "neighbors": [0,2,3,4]
+    },
+    {
+      "id": 2,
+      "triangle_count": 2,
+      "vertex_count": 4,
+      "area": 180.00000000,
+      "unresolved": false,
+      "fit": {
+        "normal": [-1.00000000,0.00000000,0.00000000],
+        "centroid": [0.00000000,5.00000000,9.00000000],
+        "d": -0.00000000,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 1.00000000
+      },
+      "neighbors": [0,1,3,4]
+    },
+    {
+      "id": 3,
+      "triangle_count": 1,
+      "vertex_count": 3,
+      "area": 70.00000000,
+      "unresolved": false,
+      "fit": {
+        "normal": [0.00000000,0.00000000,-1.00000000],
+        "centroid": [4.66666667,3.33333333,0.00000000],
+        "d": 0.00000000,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 0.96351484
+      },
+      "neighbors": [0,1,2]
+    },
+    {
+      "id": 4,
+      "triangle_count": 1,
+      "vertex_count": 3,
+      "area": 70.00000000,
+      "unresolved": false,
+      "fit": {
+        "normal": [0.00000000,0.00000000,1.00000000],
+        "centroid": [4.66666667,3.33333333,18.00000000],
+        "d": -18.00000000,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 0.96351484
+      },
+      "neighbors": [0,1,2]
+    }
+  ]
+}

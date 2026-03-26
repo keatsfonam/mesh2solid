@@ -1,0 +1,58 @@
+{
+  "input": "tests/fixtures/triangular_prism.stl",
+  "preset": "mechanical",
+  "backend": "internal_fallback",
+  "mesh_stats_before": {
+    "vertex_count": 24,
+    "triangle_count": 8,
+    "connected_components": 8,
+    "open_edge_count": 24,
+    "non_manifold_edge_count": 0,
+    "surface_area": 881.68370961,
+    "bbox_diagonal": 24.89979920
+  },
+  "mesh_stats_after": {
+    "vertex_count": 6,
+    "triangle_count": 8,
+    "connected_components": 1,
+    "open_edge_count": 0,
+    "non_manifold_edge_count": 0,
+    "surface_area": 881.68370961,
+    "bbox_diagonal": 24.89979920
+  },
+  "repair": {
+    "welded_vertices_removed": 18,
+    "duplicate_triangles_removed": 0,
+    "degenerate_triangles_removed": 0,
+    "tiny_components_removed": 0,
+    "tiny_component_triangles_removed": 0,
+    "orientation_flips": 0,
+    "warnings": []
+  },
+  "tolerances": {
+    "vertex_weld": 0.36000000,
+    "plane_distance": 3.60000000,
+    "plane_merge_distance": 2.16000000,
+    "collinear_distance": 0.90000000,
+    "normal_angle_degrees": 8.00000000,
+    "merge_angle_degrees": 4.00000000,
+    "parallel_angle_degrees": 3.00000000,
+    "perpendicular_angle_degrees": 3.00000000
+  },
+  "regions": {
+    "count": 5,
+    "unresolved_count": 0
+  },
+  "constraints": {
+    "count": 7
+  },
+  "reconstruction": {
+    "outcome": "solid_created",
+    "face_count": 5,
+    "vertex_count": 6,
+    "shell_gap_score": 0.00000000,
+    "confidence": 0.98540594,
+    "step_written": true,
+    "failure_reasons": []
+  }
+}

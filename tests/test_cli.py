@@ -9,7 +9,14 @@ import difflib
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 BIN_PATH = REPO_ROOT / "build" / "stl2solid"
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
-GOLDEN_DIR = REPO_ROOT / "tests" / "golden" / "cube"
+GOLDEN_ROOT = REPO_ROOT / "tests" / "golden"
+
+GOLDEN_CASES = {
+    "cube": {"fixture": "cube.stl", "min_regions": 6},
+    "rectangular_box": {"fixture": "rectangular_box.stl", "min_regions": 6},
+    "sloped_block": {"fixture": "sloped_block.stl", "min_regions": 6},
+    "triangular_prism": {"fixture": "triangular_prism.stl", "min_regions": 5},
+}
 
 
 def cube_mesh(size=10.0):
@@ -136,28 +143,31 @@ class CliIntegrationTests(unittest.TestCase):
             )
             self.fail(f"{actual_path.name} did not match golden output\n{diff}")
 
-    def test_checked_in_cube_matches_golden_outputs(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = pathlib.Path(tmp)
-            out_dir = tmp_path / "out"
-            mesh_path = FIXTURES_DIR / "cube.stl"
+    def test_checked_in_fixtures_match_golden_outputs(self):
+        for case_name, case in GOLDEN_CASES.items():
+            with self.subTest(case=case_name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = pathlib.Path(tmp)
+                    out_dir = tmp_path / "out"
+                    mesh_path = FIXTURES_DIR / case["fixture"]
+                    golden_dir = GOLDEN_ROOT / case_name
 
-            _, report, regions, constraints = run_cli(mesh_path, out_dir)
+                    _, report, regions, constraints = run_cli(mesh_path, out_dir)
 
-            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
-            self.assertGreaterEqual(report["regions"]["count"], 6)
-            self.assertGreaterEqual(len(regions["regions"]), 6)
-            self.assertIn("constraints", constraints)
-            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
-            self.assertIn("ADVANCED_FACE", step_text)
-            self.assertIn("MANIFOLD_SOLID_BREP", step_text)
-            self.assertNotIn("FACETED_BREP", step_text)
+                    self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+                    self.assertGreaterEqual(report["regions"]["count"], case["min_regions"])
+                    self.assertGreaterEqual(len(regions["regions"]), case["min_regions"])
+                    self.assertIn("constraints", constraints)
+                    step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+                    self.assertIn("ADVANCED_FACE", step_text)
+                    self.assertIn("MANIFOLD_SOLID_BREP", step_text)
+                    self.assertNotIn("FACETED_BREP", step_text)
 
-            self.assert_file_matches_golden(out_dir / "cleaned_mesh.stl", GOLDEN_DIR / "cleaned_mesh.stl")
-            self.assert_file_matches_golden(out_dir / "report.json", GOLDEN_DIR / "report.json")
-            self.assert_file_matches_golden(out_dir / "regions.json", GOLDEN_DIR / "regions.json")
-            self.assert_file_matches_golden(out_dir / "constraints.json", GOLDEN_DIR / "constraints.json")
-            self.assert_file_matches_golden(out_dir / "reconstruction.step", GOLDEN_DIR / "reconstruction.step")
+                    self.assert_file_matches_golden(out_dir / "cleaned_mesh.stl", golden_dir / "cleaned_mesh.stl")
+                    self.assert_file_matches_golden(out_dir / "report.json", golden_dir / "report.json")
+                    self.assert_file_matches_golden(out_dir / "regions.json", golden_dir / "regions.json")
+                    self.assert_file_matches_golden(out_dir / "constraints.json", golden_dir / "constraints.json")
+                    self.assert_file_matches_golden(out_dir / "reconstruction.step", golden_dir / "reconstruction.step")
 
     def test_repair_path_removes_duplicate_faces_and_tiny_fragment(self):
         with tempfile.TemporaryDirectory() as tmp:
