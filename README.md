@@ -24,6 +24,7 @@ to keep expanding mesh inputs without renaming the core tool again later.
   - `report.json`
   - `regions.json`
   - `constraints.json`
+  - `reconstruction_debug.json`
   - `reconstruction.step` when the planar shell validates as a closed solid
 
 The current code ships with an internal fallback geometry path so it can build in a bare
@@ -55,7 +56,8 @@ build/mesh2solid analyze part.3mf --out out --preset mechanical --solid-threshol
 ## Test Baseline
 
 The repo includes checked-in planar fixtures, including a through-hole tube, and exact golden
-outputs under `tests/golden/`.
+outputs under `tests/golden/`. It also includes a more complex bridge example under
+`examples/complex/bridge.stl` as a smoke regression for localized shell healing.
 
 Refresh the golden baseline with:
 

@@ -11,6 +11,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 BIN_PATH = REPO_ROOT / "build" / "mesh2solid"
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
 GOLDEN_ROOT = REPO_ROOT / "tests" / "golden"
+EXAMPLES_DIR = REPO_ROOT / "examples"
 
 GOLDEN_CASES = {
     "cube": {"fixture": "cube.stl", "min_regions": 6, "step_tokens": []},
@@ -382,6 +383,22 @@ class CliIntegrationTests(unittest.TestCase):
             self.assert_file_matches_golden(out_dir / "regions.json", expected_out_dir / "regions.json")
             self.assert_file_matches_golden(out_dir / "constraints.json", expected_out_dir / "constraints.json")
             self.assert_file_matches_golden(out_dir / "reconstruction.step", expected_out_dir / "reconstruction.step")
+
+    def test_complex_bridge_example_closes_to_solid(self):
+        bridge_path = EXAMPLES_DIR / "complex" / "bridge.stl"
+        self.assertTrue(bridge_path.exists(), f"Missing example fixture: {bridge_path}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            out_dir = tmp_path / "out"
+
+            _, report, _, _ = run_cli(bridge_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+            self.assertTrue((out_dir / "reconstruction.step").exists())
+            self.assertEqual(report["reconstruction"]["shell_gap_score"], 0.0)
 
 
 if __name__ == "__main__":

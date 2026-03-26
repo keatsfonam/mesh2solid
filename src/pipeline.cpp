@@ -48,6 +48,21 @@ struct EdgeKeyHash {
   }
 };
 
+struct DirectedEdgeKey {
+  int from {};
+  int to {};
+
+  bool operator==(const DirectedEdgeKey& other) const {
+    return from == other.from && to == other.to;
+  }
+};
+
+struct DirectedEdgeKeyHash {
+  std::size_t operator()(const DirectedEdgeKey& key) const {
+    return (static_cast<std::size_t>(key.from) << 32U) ^ static_cast<std::size_t>(key.to);
+  }
+};
+
 struct FaceKey {
   int a {};
   int b {};
@@ -320,6 +335,10 @@ Vec3 triangle_normal(const Vec3& a, const Vec3& b, const Vec3& c) {
 }
 
 std::string format_double(double value, int precision = 8) {
+  const double epsilon = 0.5 / std::pow(10.0, precision);
+  if (std::abs(value) < epsilon) {
+    value = 0.0;
+  }
   std::ostringstream output;
   output << std::fixed << std::setprecision(precision) << value;
   return output.str();
@@ -378,6 +397,10 @@ double signed_area_2d(const std::vector<Vec2>& loop) {
     area += a.x * b.y - b.x * a.y;
   }
   return area * 0.5;
+}
+
+double cross_2d(const Vec2& a, const Vec2& b, const Vec2& c) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
 }
 
 double point_line_distance_2d(const Vec2& point, const Vec2& a, const Vec2& b) {
@@ -1457,6 +1480,85 @@ std::size_t remove_degenerate_triangles(MeshModel& mesh) {
   return removed;
 }
 
+std::size_t remove_non_manifold_sliver_triangles(MeshModel& mesh) {
+  std::size_t removed_total = 0;
+
+  for (int iteration = 0; iteration < 8; ++iteration) {
+    const AdjacencyData adjacency = build_adjacency(mesh);
+    std::unordered_set<int> triangles_to_remove;
+
+    for (const auto& [edge_key, occurrences] : adjacency.edge_occurrences) {
+      (void)edge_key;
+      if (occurrences.size() <= 2) {
+        continue;
+      }
+
+      std::vector<int> candidates;
+      candidates.reserve(occurrences.size());
+      for (const TriangleEdgeOccurrence& occurrence : occurrences) {
+        candidates.push_back(occurrence.triangle);
+      }
+
+      auto should_remove_smallest = [&](int triangle_index,
+                                        const std::vector<int>& active_candidates) -> bool {
+        const Triangle& smallest = mesh.triangles[triangle_index];
+        double largest_area = 0.0;
+        bool has_parallel_larger = false;
+
+        for (int other_index : active_candidates) {
+          if (other_index == triangle_index) {
+            continue;
+          }
+          const Triangle& other = mesh.triangles[other_index];
+          largest_area = std::max(largest_area, other.area);
+          if (other.area >= smallest.area * 1.25 &&
+              angle_degrees_unsigned(smallest.normal, other.normal) <= 1.5) {
+            has_parallel_larger = true;
+          }
+        }
+
+        return has_parallel_larger ||
+               (largest_area > 1e-9 && smallest.area <= largest_area * 0.25);
+      };
+
+      while (candidates.size() > 2) {
+        std::sort(candidates.begin(), candidates.end(), [&mesh](int lhs, int rhs) {
+          if (std::abs(mesh.triangles[lhs].area - mesh.triangles[rhs].area) > 1e-9) {
+            return mesh.triangles[lhs].area < mesh.triangles[rhs].area;
+          }
+          return lhs < rhs;
+        });
+
+        const int smallest_triangle = candidates.front();
+        if (!should_remove_smallest(smallest_triangle, candidates)) {
+          break;
+        }
+
+        triangles_to_remove.insert(smallest_triangle);
+        candidates.erase(candidates.begin());
+      }
+    }
+
+    if (triangles_to_remove.empty()) {
+      break;
+    }
+
+    std::vector<Triangle> filtered;
+    filtered.reserve(mesh.triangles.size() - triangles_to_remove.size());
+    for (std::size_t triangle_index = 0; triangle_index < mesh.triangles.size(); ++triangle_index) {
+      if (triangles_to_remove.count(static_cast<int>(triangle_index)) == 0) {
+        filtered.push_back(mesh.triangles[triangle_index]);
+      }
+    }
+
+    removed_total += mesh.triangles.size() - filtered.size();
+    mesh.triangles = std::move(filtered);
+    recompute_mesh_geometry(mesh);
+  }
+
+  return removed_total;
+}
+
 ComponentRemoval remove_tiny_components(MeshModel& mesh, const Tolerances& tolerances) {
   const AdjacencyData adjacency = build_adjacency(mesh);
   if (mesh.triangles.empty()) {
@@ -2059,33 +2161,108 @@ std::pair<std::vector<PlaneRegion>, ConstraintGraph> apply_constraints(
 
 Vec3 snap_vertex_to_incident_planes(const Vec3& original,
                                     const std::vector<int>& incident_regions,
-                                    const std::vector<PlaneRegion>& regions) {
-  std::array<std::array<double, 3>, 3> matrix {{
-      {1.0, 0.0, 0.0},
-      {0.0, 1.0, 0.0},
-      {0.0, 0.0, 1.0},
-  }};
-  Vec3 rhs = original;
+                                    const std::vector<PlaneRegion>& regions,
+                                    const Tolerances& tolerances) {
+  struct CandidatePlane {
+    int region_id {};
+    double distance {};
+  };
 
+  std::vector<CandidatePlane> candidates;
+  candidates.reserve(incident_regions.size());
   for (int region_id : incident_regions) {
-    const Vec3& n = regions[region_id].fit.normal;
-    matrix[0][0] += n.x * n.x;
-    matrix[0][1] += n.x * n.y;
-    matrix[0][2] += n.x * n.z;
-    matrix[1][0] += n.y * n.x;
-    matrix[1][1] += n.y * n.y;
-    matrix[1][2] += n.y * n.z;
-    matrix[2][0] += n.z * n.x;
-    matrix[2][1] += n.z * n.y;
-    matrix[2][2] += n.z * n.z;
-    rhs = rhs - n * regions[region_id].fit.d;
+    candidates.push_back({region_id, std::abs(plane_distance(regions[region_id].fit, original))});
+  }
+  std::sort(candidates.begin(), candidates.end(), [&regions](const CandidatePlane& lhs,
+                                                             const CandidatePlane& rhs) {
+    if (std::abs(lhs.distance - rhs.distance) > 1e-9) {
+      return lhs.distance < rhs.distance;
+    }
+    if (std::abs(regions[lhs.region_id].fit.confidence - regions[rhs.region_id].fit.confidence) > 1e-9) {
+      return regions[lhs.region_id].fit.confidence > regions[rhs.region_id].fit.confidence;
+    }
+    if (std::abs(regions[lhs.region_id].area - regions[rhs.region_id].area) > 1e-9) {
+      return regions[lhs.region_id].area > regions[rhs.region_id].area;
+    }
+    return lhs.region_id < rhs.region_id;
+  });
+
+  const double distinct_angle = std::max(tolerances.parallel_angle_degrees * 2.0, 5.0);
+  std::vector<int> selected;
+  selected.reserve(3);
+  for (const CandidatePlane& candidate : candidates) {
+    bool distinct = true;
+    for (int selected_region : selected) {
+      if (angle_degrees_unsigned(regions[selected_region].fit.normal, regions[candidate.region_id].fit.normal) <
+          distinct_angle) {
+        distinct = false;
+        break;
+      }
+    }
+    if (distinct) {
+      selected.push_back(candidate.region_id);
+      if (selected.size() == 3) {
+        break;
+      }
+    }
+  }
+
+  if (selected.empty() && !candidates.empty()) {
+    selected.push_back(candidates.front().region_id);
   }
 
   Vec3 snapped = original;
-  if (solve_linear_system_3x3(matrix, rhs, snapped)) {
-    return snapped;
+  if (selected.size() == 1) {
+    const PlaneFit& fit = regions[selected.front()].fit;
+    snapped = original - fit.normal * plane_distance(fit, original);
+  } else {
+    bool solved_exact = false;
+    if (selected.size() >= 3) {
+      const PlaneFit& a = regions[selected[0]].fit;
+      const PlaneFit& b = regions[selected[1]].fit;
+      const PlaneFit& c = regions[selected[2]].fit;
+      std::array<std::array<double, 3>, 3> exact_matrix {{
+          {a.normal.x, a.normal.y, a.normal.z},
+          {b.normal.x, b.normal.y, b.normal.z},
+          {c.normal.x, c.normal.y, c.normal.z},
+      }};
+      Vec3 exact_rhs {-a.d, -b.d, -c.d};
+      solved_exact = solve_linear_system_3x3(exact_matrix, exact_rhs, snapped);
+    }
+
+    if (!solved_exact) {
+      std::array<std::array<double, 3>, 3> matrix {{
+          {1.0, 0.0, 0.0},
+          {0.0, 1.0, 0.0},
+          {0.0, 0.0, 1.0},
+      }};
+      Vec3 rhs = original;
+      for (int region_id : selected) {
+        const Vec3& n = regions[region_id].fit.normal;
+        matrix[0][0] += n.x * n.x;
+        matrix[0][1] += n.x * n.y;
+        matrix[0][2] += n.x * n.z;
+        matrix[1][0] += n.y * n.x;
+        matrix[1][1] += n.y * n.y;
+        matrix[1][2] += n.y * n.z;
+        matrix[2][0] += n.z * n.x;
+        matrix[2][1] += n.z * n.y;
+        matrix[2][2] += n.z * n.z;
+        rhs = rhs - n * regions[region_id].fit.d;
+      }
+
+      if (!solve_linear_system_3x3(matrix, rhs, snapped)) {
+        return original;
+      }
+    }
   }
-  return original;
+
+  const double max_snap_distance =
+      std::max(std::max(tolerances.plane_merge_distance, tolerances.vertex_weld * 4.0), 1e-6);
+  if (length(snapped - original) > max_snap_distance) {
+    return original;
+  }
+  return snapped;
 }
 
 std::vector<int> simplify_loop(const std::vector<int>& loop,
@@ -2133,6 +2310,157 @@ std::vector<int> simplify_loop(const std::vector<int>& loop,
   }
 
   return simplified.size() >= 3 ? simplified : std::vector<int> {};
+}
+
+std::vector<int> fallback_convex_hull_loop(const PlaneRegion& region,
+                                           const std::vector<int>& original_to_snapped,
+                                           const std::vector<Vec3>& vertices,
+                                           const Vec3& normal,
+                                           double tolerance) {
+  struct ProjectedVertex {
+    Vec2 point;
+    int vertex_id {};
+  };
+
+  std::vector<ProjectedVertex> projected_vertices;
+  projected_vertices.reserve(region.vertex_indices.size());
+  std::set<int> unique_vertices;
+  const PlaneBasis basis = basis_from_normal(normal);
+
+  for (int original_vertex : region.vertex_indices) {
+    const int snapped_vertex = original_to_snapped[original_vertex];
+    if (snapped_vertex < 0 || !unique_vertices.insert(snapped_vertex).second) {
+      continue;
+    }
+    projected_vertices.push_back({project_to_basis(vertices[snapped_vertex], basis), snapped_vertex});
+  }
+
+  if (projected_vertices.size() < 3) {
+    return {};
+  }
+
+  std::sort(projected_vertices.begin(), projected_vertices.end(), [](const ProjectedVertex& lhs,
+                                                                     const ProjectedVertex& rhs) {
+    if (std::abs(lhs.point.x - rhs.point.x) > 1e-9) {
+      return lhs.point.x < rhs.point.x;
+    }
+    if (std::abs(lhs.point.y - rhs.point.y) > 1e-9) {
+      return lhs.point.y < rhs.point.y;
+    }
+    return lhs.vertex_id < rhs.vertex_id;
+  });
+
+  projected_vertices.erase(
+      std::unique(projected_vertices.begin(), projected_vertices.end(),
+                  [](const ProjectedVertex& lhs, const ProjectedVertex& rhs) {
+                    return std::abs(lhs.point.x - rhs.point.x) <= 1e-9 &&
+                           std::abs(lhs.point.y - rhs.point.y) <= 1e-9;
+                  }),
+      projected_vertices.end());
+
+  if (projected_vertices.size() < 3) {
+    return {};
+  }
+
+  std::vector<ProjectedVertex> hull;
+  hull.reserve(projected_vertices.size() * 2);
+  for (const ProjectedVertex& vertex : projected_vertices) {
+    while (hull.size() >= 2 &&
+           cross_2d(hull[hull.size() - 2].point, hull.back().point, vertex.point) <= 1e-9) {
+      hull.pop_back();
+    }
+    hull.push_back(vertex);
+  }
+
+  const std::size_t lower_size = hull.size();
+  for (std::size_t index = projected_vertices.size(); index-- > 0;) {
+    const ProjectedVertex& vertex = projected_vertices[index];
+    while (hull.size() > lower_size &&
+           cross_2d(hull[hull.size() - 2].point, hull.back().point, vertex.point) <= 1e-9) {
+      hull.pop_back();
+    }
+    hull.push_back(vertex);
+  }
+
+  if (!hull.empty()) {
+    hull.pop_back();
+  }
+  if (hull.size() < 3) {
+    return {};
+  }
+
+  std::vector<int> loop;
+  loop.reserve(hull.size());
+  for (const ProjectedVertex& vertex : hull) {
+    loop.push_back(vertex.vertex_id);
+  }
+  return simplify_loop(loop, vertices, normal, tolerance);
+}
+
+void add_or_cancel_oriented_edge(
+    std::unordered_map<DirectedEdgeKey, int, DirectedEdgeKeyHash>& oriented_edges,
+    int from,
+    int to) {
+  if (from == to) {
+    return;
+  }
+
+  const DirectedEdgeKey reverse {to, from};
+  const auto reverse_it = oriented_edges.find(reverse);
+  if (reverse_it != oriented_edges.end()) {
+    if (--reverse_it->second <= 0) {
+      oriented_edges.erase(reverse_it);
+    }
+    return;
+  }
+
+  ++oriented_edges[DirectedEdgeKey {from, to}];
+}
+
+std::vector<std::pair<int, int>> build_region_boundary_edges_from_triangles(
+    const PlaneRegion& region,
+    const MeshModel& mesh,
+    const std::vector<int>& original_to_snapped) {
+  std::unordered_map<DirectedEdgeKey, int, DirectedEdgeKeyHash> oriented_edges;
+
+  for (int triangle_index : region.triangle_indices) {
+    const Triangle& triangle = mesh.triangles[triangle_index];
+    std::array<int, 3> snapped_vertices {
+        original_to_snapped[triangle.vertices[0]],
+        original_to_snapped[triangle.vertices[1]],
+        original_to_snapped[triangle.vertices[2]],
+    };
+    if (snapped_vertices[0] < 0 || snapped_vertices[1] < 0 || snapped_vertices[2] < 0) {
+      continue;
+    }
+    if (snapped_vertices[0] == snapped_vertices[1] || snapped_vertices[1] == snapped_vertices[2] ||
+        snapped_vertices[0] == snapped_vertices[2]) {
+      continue;
+    }
+    if (dot(triangle.normal, region.fit.normal) < 0.0) {
+      std::swap(snapped_vertices[1], snapped_vertices[2]);
+    }
+
+    add_or_cancel_oriented_edge(oriented_edges, snapped_vertices[0], snapped_vertices[1]);
+    add_or_cancel_oriented_edge(oriented_edges, snapped_vertices[1], snapped_vertices[2]);
+    add_or_cancel_oriented_edge(oriented_edges, snapped_vertices[2], snapped_vertices[0]);
+  }
+
+  std::vector<std::pair<int, int>> edges;
+  edges.reserve(oriented_edges.size());
+  for (const auto& [edge, count] : oriented_edges) {
+    if (count > 0) {
+      edges.push_back({edge.from, edge.to});
+    }
+  }
+  std::sort(edges.begin(), edges.end(), [](const auto& lhs, const auto& rhs) {
+    if (lhs.first != rhs.first) {
+      return lhs.first < rhs.first;
+    }
+    return lhs.second < rhs.second;
+  });
+  edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+  return edges;
 }
 
 int choose_next_edge(const std::vector<std::pair<int, int>>& edges,
@@ -2240,6 +2568,80 @@ std::size_t total_loop_edges(const std::vector<std::vector<int>>& loops) {
     total += loop.size();
   }
   return total;
+}
+
+double polygon_area(const std::vector<int>& loop, const std::vector<Vec3>& vertices, const Vec3& normal);
+
+double loops_face_area_estimate(const std::vector<std::vector<int>>& loops,
+                                const std::vector<Vec3>& vertices,
+                                const Vec3& normal) {
+  if (loops.empty()) {
+    return 0.0;
+  }
+
+  std::vector<double> areas;
+  areas.reserve(loops.size());
+  for (const auto& loop : loops) {
+    if (loop.size() >= 3) {
+      areas.push_back(polygon_area(loop, vertices, normal));
+    }
+  }
+  if (areas.empty()) {
+    return 0.0;
+  }
+
+  std::sort(areas.begin(), areas.end(), std::greater<double>());
+  double total = areas.front();
+  for (std::size_t index = 1; index < areas.size(); ++index) {
+    total -= areas[index];
+  }
+  return std::max(total, 0.0);
+}
+
+struct LoopCandidate {
+  std::vector<std::vector<int>> loops;
+  std::size_t edge_coverage {};
+  double area {};
+  double area_error {std::numeric_limits<double>::infinity()};
+  bool plausible {};
+};
+
+LoopCandidate score_loop_candidate(std::vector<std::vector<int>> loops,
+                                   const std::vector<Vec3>& vertices,
+                                   const Vec3& normal,
+                                   double expected_area) {
+  LoopCandidate candidate;
+  candidate.edge_coverage = total_loop_edges(loops);
+  candidate.area = loops_face_area_estimate(loops, vertices, normal);
+  if (expected_area > 1e-9) {
+    candidate.area_error = std::abs(candidate.area - expected_area);
+    const double area_ratio = candidate.area / expected_area;
+    candidate.plausible = area_ratio >= 0.45 && area_ratio <= 1.35;
+  } else {
+    candidate.area_error = candidate.area;
+    candidate.plausible = candidate.area > 0.0;
+  }
+  candidate.loops = std::move(loops);
+  return candidate;
+}
+
+bool is_better_loop_candidate(const LoopCandidate& candidate, const LoopCandidate& best) {
+  if (candidate.loops.empty()) {
+    return false;
+  }
+  if (best.loops.empty()) {
+    return true;
+  }
+  if (candidate.plausible != best.plausible) {
+    return candidate.plausible;
+  }
+  if (candidate.edge_coverage != best.edge_coverage) {
+    return candidate.edge_coverage > best.edge_coverage;
+  }
+  if (std::abs(candidate.area_error - best.area_error) > 1e-9) {
+    return candidate.area_error < best.area_error;
+  }
+  return candidate.loops.size() < best.loops.size();
 }
 
 std::vector<std::vector<int>> extract_loops_for_region(const std::vector<std::pair<int, int>>& edges,
@@ -2441,6 +2843,20 @@ double signed_polygon_area(const std::vector<int>& loop,
   return signed_area_2d(projected);
 }
 
+bool point_in_polygon_2d(const Vec2& point, const std::vector<Vec2>& polygon) {
+  bool inside = false;
+  for (std::size_t index = 0, previous = polygon.size() - 1; index < polygon.size(); previous = index++) {
+    const Vec2& a = polygon[index];
+    const Vec2& b = polygon[previous];
+    const bool crosses = ((a.y > point.y) != (b.y > point.y)) &&
+                         (point.x < (b.x - a.x) * (point.y - a.y) / ((b.y - a.y) + 1e-12) + a.x);
+    if (crosses) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 void orient_loop_to_sign(std::vector<int>& loop,
                          const std::vector<Vec3>& vertices,
                          const Vec3& normal,
@@ -2465,6 +2881,478 @@ double face_total_area(const ReconstructedFace& face,
     total -= polygon_area(face.loops[index], vertices, normal);
   }
   return std::max(total, 0.0);
+}
+
+void suppress_duplicate_coplanar_faces(std::vector<ReconstructedFace>& faces,
+                                       const Tolerances& tolerances) {
+  std::vector<bool> keep(faces.size(), true);
+
+  for (std::size_t lhs_index = 0; lhs_index < faces.size(); ++lhs_index) {
+    if (!keep[lhs_index]) {
+      continue;
+    }
+    for (std::size_t rhs_index = lhs_index + 1; rhs_index < faces.size(); ++rhs_index) {
+      if (!keep[rhs_index]) {
+        continue;
+      }
+
+      const ReconstructedFace& lhs = faces[lhs_index];
+      const ReconstructedFace& rhs = faces[rhs_index];
+      const double angle = angle_degrees_unsigned(lhs.fit.normal, rhs.fit.normal);
+      const double offset = coplanar_offset(lhs.fit, rhs.fit);
+      const double centroid_distance = length(lhs.fit.centroid - rhs.fit.centroid);
+      const double area_scale = std::max(std::max(lhs.area, rhs.area), 1e-9);
+      const double area_ratio = std::min(lhs.area, rhs.area) / area_scale;
+
+      if (angle > 0.5 || offset > tolerances.plane_merge_distance * 0.25 ||
+          centroid_distance > tolerances.vertex_weld * 2.0 || area_ratio < 0.95) {
+        continue;
+      }
+
+      const bool keep_lhs = lhs.confidence > rhs.confidence + 1e-9 ||
+                            (std::abs(lhs.confidence - rhs.confidence) <= 1e-9 &&
+                             lhs.region_id <= rhs.region_id);
+      if (keep_lhs) {
+        keep[rhs_index] = false;
+      } else {
+        keep[lhs_index] = false;
+        break;
+      }
+    }
+  }
+
+  std::vector<ReconstructedFace> filtered;
+  filtered.reserve(faces.size());
+  for (std::size_t index = 0; index < faces.size(); ++index) {
+    if (keep[index]) {
+      filtered.push_back(std::move(faces[index]));
+    }
+  }
+  faces = std::move(filtered);
+}
+
+std::size_t face_edge_count(const ReconstructedFace& face) {
+  std::size_t count = 0;
+  for (const auto& loop : face.loops) {
+    count += loop.size();
+  }
+  return count;
+}
+
+void prune_dangling_faces(std::vector<ReconstructedFace>& faces, const Tolerances& tolerances) {
+  for (int iteration = 0; iteration < 4; ++iteration) {
+    std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_use_count;
+    std::vector<std::vector<EdgeKey>> face_edges(faces.size());
+    for (std::size_t face_index = 0; face_index < faces.size(); ++face_index) {
+      for (const auto& loop : faces[face_index].loops) {
+        for (std::size_t edge_index = 0; edge_index < loop.size(); ++edge_index) {
+          const EdgeKey key = make_edge_key(loop[edge_index], loop[(edge_index + 1) % loop.size()]);
+          face_edges[face_index].push_back(key);
+          ++edge_use_count[key];
+        }
+      }
+    }
+
+    const auto mismatch_score = [&]() -> std::size_t {
+      std::size_t score = 0;
+      for (const auto& [edge, count] : edge_use_count) {
+        (void)edge;
+        if (count == 1 || count > 2) {
+          ++score;
+        }
+      }
+      return score;
+    };
+
+    const std::size_t baseline_score = mismatch_score();
+    std::optional<std::size_t> best_face_index;
+    std::size_t best_score = baseline_score;
+
+    for (std::size_t face_index = 0; face_index < faces.size(); ++face_index) {
+      const std::size_t total_edges = face_edge_count(faces[face_index]);
+      if (total_edges == 0) {
+        continue;
+      }
+
+      std::size_t unmatched_edges = 0;
+      for (const EdgeKey& edge : face_edges[face_index]) {
+        const int count = edge_use_count[edge];
+        if (count == 1 || count > 2) {
+          ++unmatched_edges;
+        }
+      }
+
+      if (unmatched_edges + 1 < total_edges) {
+        continue;
+      }
+      if (faces[face_index].area > tolerances.plane_distance * tolerances.plane_distance * 4.0) {
+        continue;
+      }
+
+      for (const EdgeKey& edge : face_edges[face_index]) {
+        auto it = edge_use_count.find(edge);
+        if (it == edge_use_count.end()) {
+          continue;
+        }
+        if (--it->second <= 0) {
+          edge_use_count.erase(it);
+        }
+      }
+
+      const std::size_t candidate_score = mismatch_score();
+      if (candidate_score < best_score) {
+        best_score = candidate_score;
+        best_face_index = face_index;
+      }
+
+      for (const EdgeKey& edge : face_edges[face_index]) {
+        ++edge_use_count[edge];
+      }
+    }
+
+    if (!best_face_index.has_value()) {
+      break;
+    }
+
+    faces.erase(faces.begin() + static_cast<long>(*best_face_index));
+  }
+}
+
+Vec3 newell_loop_normal(const std::vector<int>& loop, const std::vector<Vec3>& vertices) {
+  Vec3 normal {};
+  for (std::size_t index = 0; index < loop.size(); ++index) {
+    const Vec3& current = vertices[loop[index]];
+    const Vec3& next = vertices[loop[(index + 1) % loop.size()]];
+    normal.x += (current.y - next.y) * (current.z + next.z);
+    normal.y += (current.z - next.z) * (current.x + next.x);
+    normal.z += (current.x - next.x) * (current.y + next.y);
+  }
+  return normalized(normal);
+}
+
+void add_small_planar_gap_caps(std::vector<ReconstructedFace>& faces,
+                               const std::vector<Vec3>& vertices,
+                               const Tolerances& tolerances,
+                               double max_cap_area) {
+  if (faces.size() < 20) {
+    return;
+  }
+
+  std::unordered_map<EdgeKey, std::vector<std::pair<int, int>>, EdgeKeyHash> edge_orientations;
+  for (const ReconstructedFace& face : faces) {
+    for (const auto& loop : face.loops) {
+      for (std::size_t index = 0; index < loop.size(); ++index) {
+        const int from = loop[index];
+        const int to = loop[(index + 1) % loop.size()];
+        edge_orientations[make_edge_key(from, to)].push_back({from, to});
+      }
+    }
+  }
+
+  std::unordered_map<int, std::vector<int>> adjacency;
+  std::unordered_map<EdgeKey, std::pair<int, int>, EdgeKeyHash> open_orientations;
+  std::vector<EdgeKey> open_edges;
+  for (const auto& [edge, orientations] : edge_orientations) {
+    if (orientations.size() != 1) {
+      continue;
+    }
+    open_edges.push_back(edge);
+    open_orientations[edge] = orientations.front();
+    adjacency[edge.a].push_back(edge.b);
+    adjacency[edge.b].push_back(edge.a);
+  }
+
+  if (open_edges.empty()) {
+    return;
+  }
+
+  std::unordered_set<int> visited_vertices;
+  auto estimate_component_normal = [&](const std::vector<int>& component_vertices) -> Vec3 {
+    for (std::size_t i = 0; i < component_vertices.size(); ++i) {
+      const Vec3& a = vertices[component_vertices[i]];
+      for (std::size_t j = i + 1; j < component_vertices.size(); ++j) {
+        const Vec3& b = vertices[component_vertices[j]];
+        for (std::size_t k = j + 1; k < component_vertices.size(); ++k) {
+          const Vec3& c = vertices[component_vertices[k]];
+          const Vec3 normal = cross(b - a, c - a);
+          if (length_squared(normal) > 1e-12) {
+            return normalized(normal);
+          }
+        }
+      }
+    }
+    return Vec3 {0.0, 0.0, 1.0};
+  };
+
+  for (const auto& [seed_vertex, neighbors] : adjacency) {
+    (void)neighbors;
+    if (visited_vertices.count(seed_vertex) > 0) {
+      continue;
+    }
+
+    std::vector<int> component_vertices;
+    std::vector<int> frontier {seed_vertex};
+    visited_vertices.insert(seed_vertex);
+    while (!frontier.empty()) {
+      const int current = frontier.back();
+      frontier.pop_back();
+      component_vertices.push_back(current);
+      for (int neighbor : adjacency[current]) {
+        if (visited_vertices.insert(neighbor).second) {
+          frontier.push_back(neighbor);
+        }
+      }
+    }
+
+    std::set<int> component_vertex_set(component_vertices.begin(), component_vertices.end());
+    std::vector<std::pair<int, int>> component_edges;
+    component_edges.reserve(open_edges.size());
+    for (const EdgeKey& edge : open_edges) {
+      if (component_vertex_set.count(edge.a) != 0 && component_vertex_set.count(edge.b) != 0) {
+        const auto orientation_it = open_orientations.find(edge);
+        if (orientation_it != open_orientations.end()) {
+          component_edges.push_back(orientation_it->second);
+        }
+      }
+    }
+
+    if (component_edges.size() < 3 || component_edges.size() > 16) {
+      continue;
+    }
+
+    const Vec3 seed_normal = estimate_component_normal(component_vertices);
+    std::vector<std::vector<int>> loops;
+    bool degree_two_cycle = true;
+    for (int vertex_index : component_vertices) {
+      if (adjacency[vertex_index].size() != 2) {
+        degree_two_cycle = false;
+        break;
+      }
+    }
+    if (degree_two_cycle) {
+      const int start = component_vertices.front();
+      int previous = -1;
+      int current = start;
+      std::vector<int> loop;
+      bool closed = false;
+      for (int safety = 0; safety < static_cast<int>(component_vertices.size()) + 2; ++safety) {
+        loop.push_back(current);
+        const std::vector<int>& neighbors_for_vertex = adjacency[current];
+        int next = neighbors_for_vertex.front();
+        if (next == previous && neighbors_for_vertex.size() > 1) {
+          next = neighbors_for_vertex[1];
+        }
+        previous = current;
+        current = next;
+        if (current == start) {
+          closed = true;
+          break;
+        }
+      }
+      if (closed && loop.size() >= 3) {
+        loops.push_back(std::move(loop));
+      }
+    }
+    if (loops.empty()) {
+      const double gap_loop_tolerance = std::max(tolerances.vertex_weld * 0.1, 1e-6);
+      loops = extract_loops_for_region_undirected(component_edges, vertices, seed_normal,
+                                                  gap_loop_tolerance);
+    }
+    if (loops.empty()) {
+      continue;
+    }
+
+    Vec3 normal = seed_normal;
+    for (const auto& loop : loops) {
+      const Vec3 candidate = newell_loop_normal(loop, vertices);
+      if (length_squared(candidate) > 1e-12) {
+        normal = candidate;
+        break;
+      }
+    }
+    if (length_squared(normal) <= 1e-12) {
+      continue;
+    }
+
+    std::sort(loops.begin(), loops.end(), [&vertices, &normal](const auto& lhs, const auto& rhs) {
+      return polygon_area(lhs, vertices, normal) > polygon_area(rhs, vertices, normal);
+    });
+
+    Vec3 centroid {};
+    for (int vertex_index : component_vertex_set) {
+      centroid += vertices[vertex_index];
+    }
+    centroid = centroid / static_cast<double>(std::max<std::size_t>(component_vertex_set.size(), 1));
+
+    double max_distance = 0.0;
+    double sum_squared = 0.0;
+    for (int vertex_index : component_vertex_set) {
+      const double distance = std::abs(dot(normal, vertices[vertex_index] - centroid));
+      max_distance = std::max(max_distance, distance);
+      sum_squared += distance * distance;
+    }
+
+    ReconstructedFace face;
+    face.region_id = -1;
+    face.fit.normal = normal;
+    face.fit.centroid = centroid;
+    face.fit.d = -dot(face.fit.normal, face.fit.centroid);
+    face.fit.max_error = max_distance;
+    face.fit.rms_error = std::sqrt(sum_squared /
+                                   static_cast<double>(std::max<std::size_t>(component_vertex_set.size(), 1)));
+    face.fit.confidence = 0.55;
+    face.confidence = face.fit.confidence;
+    face.loops = std::move(loops);
+    orient_loop_to_sign(face.loops.front(), vertices, face.fit.normal, 1.0);
+    for (std::size_t loop_index = 1; loop_index < face.loops.size(); ++loop_index) {
+      orient_loop_to_sign(face.loops[loop_index], vertices, face.fit.normal, -1.0);
+    }
+    face.area = face_total_area(face, vertices, face.fit.normal);
+    if (face.area <= 1e-9 || face.area > max_cap_area) {
+      continue;
+    }
+
+    if (max_distance > tolerances.plane_distance * 0.25) {
+      if (face.loops.size() != 1 || face.loops.front().size() < 4 || face.loops.front().size() > 6 ||
+          max_distance > tolerances.plane_distance * 1.25) {
+        continue;
+      }
+
+      const std::vector<int>& loop = face.loops.front();
+      for (std::size_t index = 1; index + 1 < loop.size(); ++index) {
+        ReconstructedFace triangle_face;
+        triangle_face.region_id = -1;
+        triangle_face.confidence = 0.45;
+        triangle_face.loops.push_back({loop[0], loop[index], loop[index + 1]});
+        Vec3 triangle_normal = newell_loop_normal(triangle_face.loops.front(), vertices);
+        if (length_squared(triangle_normal) <= 1e-12) {
+          continue;
+        }
+        if (dot(triangle_normal, face.fit.normal) < 0.0) {
+          std::reverse(triangle_face.loops.front().begin(), triangle_face.loops.front().end());
+          triangle_normal = triangle_normal * -1.0;
+        }
+        Vec3 triangle_centroid {};
+        for (int vertex_index : triangle_face.loops.front()) {
+          triangle_centroid += vertices[vertex_index];
+        }
+        triangle_centroid = triangle_centroid / 3.0;
+        triangle_face.fit.normal = triangle_normal;
+        triangle_face.fit.centroid = triangle_centroid;
+        triangle_face.fit.d = -dot(triangle_face.fit.normal, triangle_face.fit.centroid);
+        triangle_face.fit.max_error = 0.0;
+        triangle_face.fit.rms_error = 0.0;
+        triangle_face.fit.confidence = triangle_face.confidence;
+        triangle_face.area = face_total_area(triangle_face, vertices, triangle_face.fit.normal);
+        if (triangle_face.area > 1e-9) {
+          faces.push_back(std::move(triangle_face));
+        }
+      }
+      continue;
+    }
+
+    faces.push_back(std::move(face));
+  }
+}
+
+std::vector<ReconstructedFace> build_faces_from_region_loops(const PlaneRegion& region,
+                                                             const std::vector<std::vector<int>>& loops,
+                                                             const std::vector<Vec3>& vertices) {
+  struct ProjectedLoop {
+    std::size_t index {};
+    double area {};
+    std::vector<Vec2> projected;
+    Vec2 sample_point {};
+  };
+
+  std::vector<ProjectedLoop> projected_loops;
+  projected_loops.reserve(loops.size());
+  const PlaneBasis basis = basis_from_normal(region.fit.normal);
+
+  for (std::size_t loop_index = 0; loop_index < loops.size(); ++loop_index) {
+    if (loops[loop_index].size() < 3) {
+      continue;
+    }
+    std::vector<Vec2> projected;
+    projected.reserve(loops[loop_index].size());
+    Vec2 sample_point {};
+    for (int vertex_index : loops[loop_index]) {
+      const Vec2 point = project_to_basis(vertices[vertex_index], basis);
+      projected.push_back(point);
+      sample_point.x += point.x;
+      sample_point.y += point.y;
+    }
+    sample_point.x /= static_cast<double>(projected.size());
+    sample_point.y /= static_cast<double>(projected.size());
+    projected_loops.push_back(
+        {loop_index, std::abs(signed_area_2d(projected)), std::move(projected), sample_point});
+  }
+
+  std::sort(projected_loops.begin(), projected_loops.end(),
+            [](const ProjectedLoop& lhs, const ProjectedLoop& rhs) {
+              if (std::abs(lhs.area - rhs.area) > 1e-9) {
+                return lhs.area > rhs.area;
+              }
+              return lhs.index < rhs.index;
+            });
+
+  std::vector<int> parent(loops.size(), -1);
+  std::vector<int> depth(loops.size(), 0);
+  for (std::size_t candidate_index = 0; candidate_index < projected_loops.size(); ++candidate_index) {
+    const ProjectedLoop& candidate = projected_loops[candidate_index];
+    for (std::size_t container_index = 0; container_index < candidate_index; ++container_index) {
+      const ProjectedLoop& container = projected_loops[container_index];
+      if (point_in_polygon_2d(candidate.sample_point, container.projected)) {
+        parent[candidate.index] = static_cast<int>(container.index);
+        depth[candidate.index] = depth[container.index] + 1;
+        break;
+      }
+    }
+  }
+
+  std::unordered_map<int, std::vector<std::size_t>> outer_to_holes;
+  std::vector<std::size_t> outer_indices;
+  for (const ProjectedLoop& projected_loop : projected_loops) {
+    const std::size_t loop_index = projected_loop.index;
+    if (depth[loop_index] % 2 == 0) {
+      outer_indices.push_back(loop_index);
+      continue;
+    }
+
+    int outer_index = parent[loop_index];
+    while (outer_index >= 0 && depth[static_cast<std::size_t>(outer_index)] % 2 == 1) {
+      outer_index = parent[static_cast<std::size_t>(outer_index)];
+    }
+    if (outer_index >= 0) {
+      outer_to_holes[outer_index].push_back(loop_index);
+    }
+  }
+
+  std::vector<ReconstructedFace> faces;
+  faces.reserve(outer_indices.size());
+  for (std::size_t outer_index : outer_indices) {
+    ReconstructedFace face;
+    face.region_id = region.id;
+    face.fit = region.fit;
+    face.confidence = region.fit.confidence;
+    face.loops.push_back(loops[outer_index]);
+    orient_loop_to_sign(face.loops.front(), vertices, region.fit.normal, 1.0);
+
+    auto holes_it = outer_to_holes.find(static_cast<int>(outer_index));
+    if (holes_it != outer_to_holes.end()) {
+      std::sort(holes_it->second.begin(), holes_it->second.end());
+      for (std::size_t hole_index : holes_it->second) {
+        std::vector<int> hole = loops[hole_index];
+        orient_loop_to_sign(hole, vertices, region.fit.normal, -1.0);
+        face.loops.push_back(std::move(hole));
+      }
+    }
+
+    face.area = face_total_area(face, vertices, region.fit.normal);
+    faces.push_back(std::move(face));
+  }
+
+  return faces;
 }
 
 template <typename Fn>
@@ -2616,7 +3504,7 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
 
   std::vector<int> original_to_snapped(mesh.vertices.size(), -1);
   std::unordered_map<GridKey, std::vector<int>, GridKeyHash> snapped_lookup;
-  const double snap_weld_tolerance = std::max(tolerances.collinear_distance * 3.0, 1e-7);
+  const double snap_weld_tolerance = std::max(tolerances.vertex_weld * 0.10, 1e-7);
   auto quantize = [snap_weld_tolerance](double value) -> long long {
     return static_cast<long long>(std::llround(value / snap_weld_tolerance));
   };
@@ -2625,7 +3513,7 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
     Vec3 snapped = mesh.vertices[vertex_index];
     if (!incident_regions[vertex_index].empty()) {
       snapped = snap_vertex_to_incident_planes(mesh.vertices[vertex_index], incident_regions[vertex_index],
-                                               regions);
+                                               regions, tolerances);
     }
     const GridKey key {quantize(snapped.x), quantize(snapped.y), quantize(snapped.z)};
     const std::optional<int> found =
@@ -2644,12 +3532,25 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
   for (std::size_t triangle_index = 0; triangle_index < mesh.triangles.size(); ++triangle_index) {
     const Triangle& triangle = mesh.triangles[triangle_index];
     for (int edge_index = 0; edge_index < 3; ++edge_index) {
-      const int neighbor = adjacency.neighbors[triangle_index][edge_index];
-      if (neighbor >= 0 && mesh.triangles[neighbor].region_id == triangle.region_id) {
-        continue;
-      }
       const int original_from = triangle.vertices[edge_index];
       const int original_to = triangle.vertices[(edge_index + 1) % 3];
+      const EdgeKey edge_key = make_edge_key(original_from, original_to);
+      const auto occurrences_it = adjacency.edge_occurrences.find(edge_key);
+      bool shared_with_same_region = false;
+      if (occurrences_it != adjacency.edge_occurrences.end()) {
+        for (const TriangleEdgeOccurrence& occurrence : occurrences_it->second) {
+          if (occurrence.triangle == static_cast<int>(triangle_index)) {
+            continue;
+          }
+          if (mesh.triangles[occurrence.triangle].region_id == triangle.region_id) {
+            shared_with_same_region = true;
+            break;
+          }
+        }
+      }
+      if (shared_with_same_region) {
+        continue;
+      }
       const int snapped_from = original_to_snapped[original_from];
       const int snapped_to = original_to_snapped[original_to];
       if (snapped_from == snapped_to) {
@@ -2660,20 +3561,60 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
   }
 
   for (const PlaneRegion& region : regions) {
-    const auto edges_it = boundary_edges.find(region.id);
-    if (edges_it == boundary_edges.end()) {
-      result.omitted_region_ids.push_back(region.id);
-      continue;
+    LoopCandidate best_candidate;
+    const auto topological_edges_it = boundary_edges.find(region.id);
+    if (topological_edges_it != boundary_edges.end()) {
+      LoopCandidate directed_candidate =
+          score_loop_candidate(extract_loops_for_region(topological_edges_it->second, result.vertices,
+                                                        region.fit.normal,
+                                                        tolerances.collinear_distance),
+                               result.vertices, region.fit.normal, region.area);
+      if (is_better_loop_candidate(directed_candidate, best_candidate)) {
+        best_candidate = std::move(directed_candidate);
+      }
+
+      LoopCandidate undirected_candidate =
+          score_loop_candidate(extract_loops_for_region_undirected(topological_edges_it->second,
+                                                                   result.vertices, region.fit.normal,
+                                                                   tolerances.collinear_distance),
+                               result.vertices, region.fit.normal, region.area);
+      if (is_better_loop_candidate(undirected_candidate, best_candidate)) {
+        best_candidate = std::move(undirected_candidate);
+      }
     }
-    std::vector<std::vector<int>> loops =
-        extract_loops_for_region(edges_it->second, result.vertices, region.fit.normal,
-                                 tolerances.collinear_distance);
-    if (total_loop_edges(loops) < edges_it->second.size()) {
-      std::vector<std::vector<int>> fallback_loops =
-          extract_loops_for_region_undirected(edges_it->second, result.vertices, region.fit.normal,
-                                              tolerances.collinear_distance);
-      if (total_loop_edges(fallback_loops) > total_loop_edges(loops)) {
-        loops = std::move(fallback_loops);
+
+    const std::vector<std::pair<int, int>> triangle_boundary_edges =
+        build_region_boundary_edges_from_triangles(region, mesh, original_to_snapped);
+    if (!triangle_boundary_edges.empty()) {
+      LoopCandidate triangle_directed =
+          score_loop_candidate(extract_loops_for_region(triangle_boundary_edges, result.vertices,
+                                                        region.fit.normal,
+                                                        tolerances.collinear_distance),
+                               result.vertices, region.fit.normal, region.area);
+      if (is_better_loop_candidate(triangle_directed, best_candidate)) {
+        best_candidate = std::move(triangle_directed);
+      }
+
+      LoopCandidate triangle_undirected =
+          score_loop_candidate(extract_loops_for_region_undirected(triangle_boundary_edges,
+                                                                   result.vertices, region.fit.normal,
+                                                                   tolerances.collinear_distance),
+                               result.vertices, region.fit.normal, region.area);
+      if (is_better_loop_candidate(triangle_undirected, best_candidate)) {
+        best_candidate = std::move(triangle_undirected);
+      }
+    }
+
+    std::vector<std::vector<int>> loops = std::move(best_candidate.loops);
+    if (loops.empty()) {
+      std::vector<int> hull =
+          fallback_convex_hull_loop(region, original_to_snapped, result.vertices, region.fit.normal,
+                                    tolerances.collinear_distance);
+      const double hull_area =
+          hull.size() >= 3 ? polygon_area(hull, result.vertices, region.fit.normal) : 0.0;
+      const double hull_ratio = region.area > 1e-9 ? hull_area / region.area : 0.0;
+      if (hull.size() >= 3 && hull_ratio >= 0.7 && hull_ratio <= 1.15) {
+        loops.push_back(std::move(hull));
       }
     }
     if (loops.empty()) {
@@ -2681,28 +3622,17 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
       continue;
     }
 
-    std::sort(loops.begin(), loops.end(), [&result, &region](const auto& lhs, const auto& rhs) {
-      return polygon_area(lhs, result.vertices, region.fit.normal) >
-             polygon_area(rhs, result.vertices, region.fit.normal);
-    });
-
-    ReconstructedFace face;
-    face.region_id = region.id;
-    face.fit = region.fit;
-    face.loops = std::move(loops);
-    if (face.loops.empty()) {
+    std::vector<ReconstructedFace> faces = build_faces_from_region_loops(region, loops, result.vertices);
+    if (faces.empty()) {
+      result.omitted_region_ids.push_back(region.id);
       continue;
     }
-    orient_loop_to_sign(face.loops.front(), result.vertices, region.fit.normal, 1.0);
-    for (std::size_t loop_index = 1; loop_index < face.loops.size(); ++loop_index) {
-      orient_loop_to_sign(face.loops[loop_index], result.vertices, region.fit.normal, -1.0);
-    }
-    face.area = face_total_area(face, result.vertices, region.fit.normal);
-    face.confidence = region.fit.confidence;
-    if (face.loops.front().size() >= 3) {
-      result.faces.push_back(std::move(face));
-    } else {
-      result.omitted_region_ids.push_back(region.id);
+    for (ReconstructedFace& face : faces) {
+      if (!face.loops.empty() && face.loops.front().size() >= 3) {
+        result.faces.push_back(std::move(face));
+      } else {
+        result.omitted_region_ids.push_back(region.id);
+      }
     }
   }
 
@@ -2724,6 +3654,12 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
     }
     face.area = face_total_area(face, result.vertices, face.fit.normal);
   }
+  suppress_duplicate_coplanar_faces(result.faces, tolerances);
+  prune_dangling_faces(result.faces, tolerances);
+  const double shell_cap_area_limit =
+      std::min(bounds_diagonal(mesh.bounds) * bounds_diagonal(mesh.bounds) * 0.015,
+               tolerances.plane_distance * tolerances.plane_distance * 40.0);
+  add_small_planar_gap_caps(result.faces, result.vertices, tolerances, shell_cap_area_limit);
 
   std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_use_count;
   std::unordered_map<EdgeKey, std::vector<int>, EdgeKeyHash> edge_regions;
@@ -3100,6 +4036,56 @@ std::string constraints_json(const ConstraintGraph& graph) {
   return output.str();
 }
 
+std::string reconstruction_debug_json(const ReconstructionResult& reconstruction) {
+  std::ostringstream output;
+  output << "{\n";
+  output << "  \"vertices\": [\n";
+  for (std::size_t index = 0; index < reconstruction.vertices.size(); ++index) {
+    output << "    " << vec3_json(reconstruction.vertices[index]);
+    if (index + 1 < reconstruction.vertices.size()) {
+      output << ",";
+    }
+    output << "\n";
+  }
+  output << "  ],\n";
+  output << "  \"faces\": [\n";
+  for (std::size_t index = 0; index < reconstruction.faces.size(); ++index) {
+    const ReconstructedFace& face = reconstruction.faces[index];
+    output << "    {\n";
+    output << "      \"region_id\": " << face.region_id << ",\n";
+    output << "      \"area\": " << format_double(face.area) << ",\n";
+    output << "      \"confidence\": " << format_double(face.confidence) << ",\n";
+    output << "      \"fit\": {\n";
+    output << "        \"normal\": " << vec3_json(face.fit.normal) << ",\n";
+    output << "        \"centroid\": " << vec3_json(face.fit.centroid) << ",\n";
+    output << "        \"d\": " << format_double(face.fit.d) << "\n";
+    output << "      },\n";
+    output << "      \"loops\": [\n";
+    for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
+      output << "        [";
+      for (std::size_t vertex_index = 0; vertex_index < face.loops[loop_index].size(); ++vertex_index) {
+        if (vertex_index > 0) {
+          output << ",";
+        }
+        output << face.loops[loop_index][vertex_index];
+      }
+      output << "]";
+      if (loop_index + 1 < face.loops.size()) {
+        output << ",";
+      }
+      output << "\n";
+    }
+    output << "      ]\n";
+    output << "    }";
+    if (index + 1 < reconstruction.faces.size()) {
+      output << ",";
+    }
+    output << "\n";
+  }
+  output << "  ]\n}\n";
+  return output.str();
+}
+
 std::string report_json(const RunReport& report, const AnalyzeOptions& options) {
   std::ostringstream output;
   output << "{\n";
@@ -3256,9 +4242,16 @@ RunReport analyze(const AnalyzeOptions& options) {
   report.repair.tiny_component_triangles_removed = removal.triangles_removed;
   report.repair.orientation_flips = orient_triangles_consistently(mesh);
   compact_vertices(mesh);
+  const std::size_t non_manifold_slivers_removed = remove_non_manifold_sliver_triangles(mesh);
+  compact_vertices(mesh);
 
   report.tolerances = build_tolerances(mesh, options.preset);
   report.repair.after = compute_mesh_stats(mesh);
+
+  if (non_manifold_slivers_removed > 0) {
+    report.repair.warnings.push_back("Removed " + std::to_string(non_manifold_slivers_removed) +
+                                     " sliver triangles while resolving non-manifold edges");
+  }
 
   if (report.repair.after.open_edge_count > 0) {
     report.repair.warnings.push_back("Mesh still has open boundary edges after repair");
@@ -3285,6 +4278,8 @@ void write_outputs(const AnalyzeOptions& options, RunReport& report) {
   write_ascii_stl(options.output_dir / "cleaned_mesh.stl", report.cleaned_mesh);
   write_text(options.output_dir / "regions.json", regions_json(report.regions));
   write_text(options.output_dir / "constraints.json", constraints_json(report.constraint_graph));
+  write_text(options.output_dir / "reconstruction_debug.json",
+             reconstruction_debug_json(report.reconstruction));
 
   if (report.reconstruction.outcome == ReconstructionOutcome::SolidCreated) {
     report.reconstruction.step_written =
