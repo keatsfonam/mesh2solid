@@ -60,10 +60,8 @@ BENCHMARK_CASES = {
     },
     "cloudgripper_arm_linear_pinion_gear": {
         "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "arm_linear_pinion_gear.stl",
-        "expected_outcome": "shell_only",
+        "expected_outcome": "solid_created",
         "min_regions": 25,
-        "max_open_edges": 4,
-        "max_non_manifold_edges": 2,
     },
     "bcn3d_moveo_t4m1e": {
         "path": EXAMPLES_DIR / "benchmark" / "bcn3d_moveo" / "t4m1e.stl",

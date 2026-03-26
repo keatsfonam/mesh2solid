@@ -3540,6 +3540,449 @@ double signed_polyhedron_volume(const std::vector<ReconstructedFace>& faces,
   return volume;
 }
 
+void append_loop_candidate(std::vector<LoopCandidate>& candidates,
+                           std::vector<std::vector<int>> loops,
+                           const std::vector<Vec3>& vertices,
+                           const Vec3& normal,
+                           double expected_area) {
+  LoopCandidate candidate =
+      score_loop_candidate(std::move(loops), vertices, normal, expected_area);
+  if (!candidate.loops.empty()) {
+    candidates.push_back(std::move(candidate));
+  }
+}
+
+std::vector<LoopCandidate> collect_region_loop_candidates(
+    const PlaneRegion& region,
+    const std::unordered_map<int, std::vector<std::pair<int, int>>>& boundary_edges,
+    const MeshModel& mesh,
+    const std::vector<int>& original_to_snapped,
+    const std::vector<Vec3>& vertices,
+    const Tolerances& tolerances) {
+  std::vector<LoopCandidate> candidates;
+
+  const auto topological_edges_it = boundary_edges.find(region.id);
+  if (topological_edges_it != boundary_edges.end()) {
+    append_loop_candidate(candidates,
+                          extract_loops_for_region(topological_edges_it->second, vertices,
+                                                   region.fit.normal,
+                                                   tolerances.collinear_distance),
+                          vertices, region.fit.normal, region.area);
+    append_loop_candidate(candidates,
+                          extract_loops_for_region_undirected(topological_edges_it->second, vertices,
+                                                              region.fit.normal,
+                                                              tolerances.collinear_distance),
+                          vertices, region.fit.normal, region.area);
+  }
+
+  const std::vector<std::pair<int, int>> triangle_boundary_edges =
+      build_region_boundary_edges_from_triangles(region, mesh, original_to_snapped);
+  if (!triangle_boundary_edges.empty()) {
+    append_loop_candidate(candidates,
+                          extract_loops_for_region(triangle_boundary_edges, vertices,
+                                                   region.fit.normal,
+                                                   tolerances.collinear_distance),
+                          vertices, region.fit.normal, region.area);
+    append_loop_candidate(candidates,
+                          extract_loops_for_region_undirected(triangle_boundary_edges, vertices,
+                                                              region.fit.normal,
+                                                              tolerances.collinear_distance),
+                          vertices, region.fit.normal, region.area);
+  }
+
+  if (candidates.empty()) {
+    std::vector<int> hull =
+        fallback_convex_hull_loop(region, original_to_snapped, vertices, region.fit.normal,
+                                  tolerances.collinear_distance);
+    const double hull_area =
+        hull.size() >= 3 ? polygon_area(hull, vertices, region.fit.normal) : 0.0;
+    const double hull_ratio = region.area > 1e-9 ? hull_area / region.area : 0.0;
+    if (hull.size() >= 3 && hull_ratio >= 0.7 && hull_ratio <= 1.15) {
+      append_loop_candidate(candidates, {std::move(hull)}, vertices, region.fit.normal, region.area);
+    }
+  }
+
+  return candidates;
+}
+
+std::size_t choose_initial_candidate_index(const std::vector<LoopCandidate>& candidates) {
+  if (candidates.empty()) {
+    return std::numeric_limits<std::size_t>::max();
+  }
+
+  std::size_t best_index = 0;
+  LoopCandidate best_candidate = candidates.front();
+  for (std::size_t index = 1; index < candidates.size(); ++index) {
+    if (is_better_loop_candidate(candidates[index], best_candidate)) {
+      best_candidate = candidates[index];
+      best_index = index;
+    }
+  }
+  return best_index;
+}
+
+void build_faces_from_selected_candidates(const std::vector<PlaneRegion>& regions,
+                                          const std::vector<std::vector<LoopCandidate>>& candidates,
+                                          const std::vector<std::size_t>& selected_indices,
+                                          const std::vector<Vec3>& vertices,
+                                          ReconstructionResult& result) {
+  result.faces.clear();
+  result.omitted_region_ids.clear();
+  result.edge_split_insertions = 0;
+
+  for (std::size_t region_index = 0; region_index < regions.size(); ++region_index) {
+    const PlaneRegion& region = regions[region_index];
+    if (region_index >= selected_indices.size() ||
+        selected_indices[region_index] >= candidates[region_index].size()) {
+      result.omitted_region_ids.push_back(region.id);
+      continue;
+    }
+
+    std::vector<ReconstructedFace> faces =
+        build_faces_from_region_loops(region, candidates[region_index][selected_indices[region_index]].loops,
+                                      vertices);
+    if (faces.empty()) {
+      result.omitted_region_ids.push_back(region.id);
+      continue;
+    }
+
+    bool emitted_face = false;
+    for (ReconstructedFace& face : faces) {
+      if (!face.loops.empty() && face.loops.front().size() >= 3) {
+        result.faces.push_back(std::move(face));
+        emitted_face = true;
+      }
+    }
+    if (!emitted_face) {
+      result.omitted_region_ids.push_back(region.id);
+    }
+  }
+}
+
+void finalize_shell_reconstruction(ReconstructionResult& result,
+                                   const MeshModel& mesh,
+                                   const Tolerances& tolerances,
+                                   double solid_threshold) {
+  result.failure_reasons.clear();
+  result.problematic_regions.clear();
+  result.open_edge_count = 0;
+  result.non_manifold_edge_count = 0;
+  result.shell_gap_score = 1.0;
+  result.confidence = 0.0;
+
+  if (result.faces.empty()) {
+    result.failure_reasons.push_back("Unable to reconstruct any planar shell faces");
+    result.outcome = ReconstructionOutcome::AnalysisOnly;
+    return;
+  }
+
+  refine_face_loops_with_shared_vertices(result.faces, result.vertices, tolerances.collinear_distance,
+                                         result.edge_split_insertions);
+  for (ReconstructedFace& face : result.faces) {
+    if (face.loops.empty()) {
+      continue;
+    }
+    orient_loop_to_sign(face.loops.front(), result.vertices, face.fit.normal, 1.0);
+    for (std::size_t loop_index = 1; loop_index < face.loops.size(); ++loop_index) {
+      orient_loop_to_sign(face.loops[loop_index], result.vertices, face.fit.normal, -1.0);
+    }
+    face.area = face_total_area(face, result.vertices, face.fit.normal);
+  }
+  suppress_duplicate_coplanar_faces(result.faces, tolerances);
+  prune_dangling_faces(result.faces, tolerances);
+  const double shell_cap_area_limit =
+      std::min(bounds_diagonal(mesh.bounds) * bounds_diagonal(mesh.bounds) * 0.015,
+               tolerances.plane_distance * tolerances.plane_distance * 40.0);
+  add_small_planar_gap_caps(result.faces, result.vertices, tolerances, shell_cap_area_limit);
+  sanitize_face_loops(result.faces);
+
+  std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_use_count;
+  std::unordered_map<EdgeKey, std::vector<int>, EdgeKeyHash> edge_regions;
+  for (const ReconstructedFace& face : result.faces) {
+    for_each_face_edge(face, [&](int from, int to) {
+      const EdgeKey key = make_edge_key(from, to);
+      ++edge_use_count[key];
+      edge_regions[key].push_back(face.region_id);
+    });
+  }
+
+  std::size_t open_shell_edges = 0;
+  std::size_t non_manifold_shell_edges = 0;
+  std::unordered_map<int, std::size_t> problematic_region_counts;
+  for (const auto& [edge_key, count] : edge_use_count) {
+    if (count == 1) {
+      ++open_shell_edges;
+      for (int region_id : edge_regions[edge_key]) {
+        ++problematic_region_counts[region_id];
+      }
+    } else if (count != 2) {
+      ++non_manifold_shell_edges;
+      for (int region_id : edge_regions[edge_key]) {
+        ++problematic_region_counts[region_id];
+      }
+    }
+  }
+
+  result.open_edge_count = open_shell_edges;
+  result.non_manifold_edge_count = non_manifold_shell_edges;
+  result.problematic_regions.reserve(problematic_region_counts.size());
+  for (const auto& [region_id, edge_count] : problematic_region_counts) {
+    result.problematic_regions.push_back({region_id, edge_count});
+  }
+  std::sort(result.problematic_regions.begin(), result.problematic_regions.end(),
+            [](const RegionTopologyIssue& lhs, const RegionTopologyIssue& rhs) {
+              if (lhs.edge_count != rhs.edge_count) {
+                return lhs.edge_count > rhs.edge_count;
+              }
+              return lhs.region_id < rhs.region_id;
+            });
+
+  result.shell_gap_score =
+      edge_use_count.empty()
+          ? 1.0
+          : static_cast<double>(open_shell_edges + non_manifold_shell_edges) /
+                static_cast<double>(edge_use_count.size());
+
+  for (const ReconstructedFace& face : result.faces) {
+    result.confidence += face.confidence;
+  }
+  result.confidence /= static_cast<double>(result.faces.size());
+
+  if (open_shell_edges > 0 || non_manifold_shell_edges > 0) {
+    result.failure_reasons.push_back("Reconstructed shell is open or topologically inconsistent");
+  }
+  if (result.faces.size() < 4) {
+    result.failure_reasons.push_back("Too few reconstructed faces for a closed solid");
+  }
+
+  const double volume = std::abs(signed_polyhedron_volume(result.faces, result.vertices));
+  const double min_volume = std::pow(std::max(bounds_diagonal(mesh.bounds), 1e-6), 3.0) * 1e-6;
+  if (volume <= min_volume) {
+    result.failure_reasons.push_back("Reconstructed shell volume is too small or inconsistent");
+  }
+
+  if (open_shell_edges == 0 && non_manifold_shell_edges == 0 && result.faces.size() >= 4 &&
+      volume > min_volume && result.confidence >= solid_threshold) {
+    result.outcome = ReconstructionOutcome::SolidCreated;
+  } else if (!result.faces.empty()) {
+    result.outcome = ReconstructionOutcome::ShellOnly;
+    if (result.confidence < solid_threshold) {
+      result.failure_reasons.push_back("Solid export was gated by low reconstruction confidence");
+    }
+  } else {
+    result.outcome = ReconstructionOutcome::AnalysisOnly;
+  }
+}
+
+bool is_better_reconstruction_result(const ReconstructionResult& candidate,
+                                     const ReconstructionResult& current) {
+  const auto outcome_rank = [](ReconstructionOutcome outcome) {
+    switch (outcome) {
+      case ReconstructionOutcome::SolidCreated:
+        return 3;
+      case ReconstructionOutcome::ShellOnly:
+        return 2;
+      case ReconstructionOutcome::AnalysisOnly:
+      default:
+        return 1;
+    }
+  };
+
+  if (outcome_rank(candidate.outcome) != outcome_rank(current.outcome)) {
+    return outcome_rank(candidate.outcome) > outcome_rank(current.outcome);
+  }
+  if (candidate.non_manifold_edge_count != current.non_manifold_edge_count) {
+    return candidate.non_manifold_edge_count < current.non_manifold_edge_count;
+  }
+  if (candidate.open_edge_count != current.open_edge_count) {
+    return candidate.open_edge_count < current.open_edge_count;
+  }
+  if (candidate.omitted_region_ids.size() != current.omitted_region_ids.size()) {
+    return candidate.omitted_region_ids.size() < current.omitted_region_ids.size();
+  }
+  if (std::abs(candidate.shell_gap_score - current.shell_gap_score) > 1e-9) {
+    return candidate.shell_gap_score < current.shell_gap_score;
+  }
+  if (std::abs(candidate.confidence - current.confidence) > 1e-9) {
+    return candidate.confidence > current.confidence;
+  }
+  return candidate.faces.size() > current.faces.size();
+}
+
+std::vector<std::size_t> collect_problem_region_indices(
+    const ReconstructionResult& result,
+    const std::unordered_map<int, std::size_t>& region_id_to_index,
+    std::size_t max_regions) {
+  std::vector<std::size_t> indices;
+  std::unordered_set<std::size_t> seen;
+
+  for (const RegionTopologyIssue& issue : result.problematic_regions) {
+    const auto it = region_id_to_index.find(issue.region_id);
+    if (it != region_id_to_index.end() && seen.insert(it->second).second) {
+      indices.push_back(it->second);
+      if (indices.size() >= max_regions) {
+        return indices;
+      }
+    }
+  }
+  for (int region_id : result.omitted_region_ids) {
+    const auto it = region_id_to_index.find(region_id);
+    if (it != region_id_to_index.end() && seen.insert(it->second).second) {
+      indices.push_back(it->second);
+      if (indices.size() >= max_regions) {
+        return indices;
+      }
+    }
+  }
+  return indices;
+}
+
+void optimize_region_loop_choices(ReconstructionResult& result,
+                                  const MeshModel& mesh,
+                                  const std::vector<PlaneRegion>& regions,
+                                  const std::vector<std::vector<LoopCandidate>>& candidates,
+                                  std::vector<std::size_t>& selected_indices,
+                                  const Tolerances& tolerances,
+                                  double solid_threshold) {
+  std::unordered_map<int, std::size_t> region_id_to_index;
+  for (std::size_t index = 0; index < regions.size(); ++index) {
+    region_id_to_index[regions[index].id] = index;
+  }
+
+  for (int pass = 0; pass < 2; ++pass) {
+    bool improved = false;
+    const std::vector<std::size_t> priority =
+        collect_problem_region_indices(result, region_id_to_index, 24);
+    for (std::size_t region_index : priority) {
+      if (region_index >= candidates.size() || candidates[region_index].size() <= 1) {
+        continue;
+      }
+
+      ReconstructionResult best_result = result;
+      std::size_t best_choice = selected_indices[region_index];
+      for (std::size_t candidate_index = 0; candidate_index < candidates[region_index].size();
+           ++candidate_index) {
+        if (candidate_index == best_choice) {
+          continue;
+        }
+
+        std::vector<std::size_t> trial_indices = selected_indices;
+        trial_indices[region_index] = candidate_index;
+
+        ReconstructionResult trial;
+        trial.vertices = result.vertices;
+        build_faces_from_selected_candidates(regions, candidates, trial_indices, trial.vertices, trial);
+        finalize_shell_reconstruction(trial, mesh, tolerances, solid_threshold);
+        if (is_better_reconstruction_result(trial, best_result)) {
+          best_result = std::move(trial);
+          best_choice = candidate_index;
+        }
+      }
+
+      if (best_choice != selected_indices[region_index]) {
+        selected_indices[region_index] = best_choice;
+        result = std::move(best_result);
+        improved = true;
+      }
+    }
+
+    if (!improved || result.outcome == ReconstructionOutcome::SolidCreated) {
+      break;
+    }
+  }
+}
+
+void resolve_tiny_conflict_faces(ReconstructionResult& result,
+                                 const MeshModel& mesh,
+                                 const Tolerances& tolerances,
+                                 double solid_threshold) {
+  if (result.non_manifold_edge_count == 0 || result.faces.empty()) {
+    return;
+  }
+
+  const double shell_cap_area_limit =
+      std::min(bounds_diagonal(mesh.bounds) * bounds_diagonal(mesh.bounds) * 0.015,
+               tolerances.plane_distance * tolerances.plane_distance * 40.0);
+
+  std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_use_count;
+  std::vector<std::unordered_set<EdgeKey, EdgeKeyHash>> face_edges(result.faces.size());
+  for (std::size_t face_index = 0; face_index < result.faces.size(); ++face_index) {
+    for_each_face_edge(result.faces[face_index], [&](int from, int to) {
+      const EdgeKey key = make_edge_key(from, to);
+      ++edge_use_count[key];
+      face_edges[face_index].insert(key);
+    });
+  }
+
+  std::vector<std::size_t> candidate_faces;
+  candidate_faces.reserve(result.faces.size());
+  for (std::size_t face_index = 0; face_index < result.faces.size(); ++face_index) {
+    const ReconstructedFace& face = result.faces[face_index];
+    if (face.region_id < 0 || face.area > shell_cap_area_limit || face.loops.size() != 1 ||
+        face.loops.front().size() > 8) {
+      continue;
+    }
+    bool touches_non_manifold = false;
+    for (const EdgeKey& edge : face_edges[face_index]) {
+      const auto edge_it = edge_use_count.find(edge);
+      if (edge_it != edge_use_count.end() && edge_it->second > 2) {
+        touches_non_manifold = true;
+        break;
+      }
+    }
+    if (touches_non_manifold) {
+      candidate_faces.push_back(face_index);
+    }
+  }
+
+  if (candidate_faces.empty() || candidate_faces.size() > 6) {
+    return;
+  }
+
+  ReconstructionResult best_result = result;
+  const std::size_t subset_limit = std::min<std::size_t>(3, candidate_faces.size());
+  const std::size_t total_masks = std::size_t {1} << candidate_faces.size();
+  for (std::size_t mask = 1; mask < total_masks; ++mask) {
+    if (static_cast<std::size_t>(__builtin_popcountll(static_cast<unsigned long long>(mask))) >
+        subset_limit) {
+      continue;
+    }
+
+    ReconstructionResult trial = result;
+    std::vector<ReconstructedFace> kept_faces;
+    kept_faces.reserve(result.faces.size());
+    std::unordered_set<int> removed_region_ids;
+    for (std::size_t face_index = 0; face_index < result.faces.size(); ++face_index) {
+      bool remove_face = false;
+      for (std::size_t candidate_index = 0; candidate_index < candidate_faces.size(); ++candidate_index) {
+        if (((mask >> candidate_index) & 1U) != 0U && candidate_faces[candidate_index] == face_index) {
+          remove_face = true;
+          removed_region_ids.insert(result.faces[face_index].region_id);
+          break;
+        }
+      }
+      if (!remove_face) {
+        kept_faces.push_back(result.faces[face_index]);
+      }
+    }
+    trial.faces = std::move(kept_faces);
+    for (int region_id : removed_region_ids) {
+      if (std::find(trial.omitted_region_ids.begin(), trial.omitted_region_ids.end(), region_id) ==
+          trial.omitted_region_ids.end()) {
+        trial.omitted_region_ids.push_back(region_id);
+      }
+    }
+    finalize_shell_reconstruction(trial, mesh, tolerances, solid_threshold);
+    if (is_better_reconstruction_result(trial, best_result)) {
+      best_result = std::move(trial);
+    }
+  }
+
+  if (is_better_reconstruction_result(best_result, result)) {
+    result = std::move(best_result);
+  }
+}
+
 ReconstructionResult reconstruct_shell(const MeshModel& mesh,
                                        const std::vector<PlaneRegion>& regions,
                                        const Tolerances& tolerances,
@@ -3797,6 +4240,38 @@ ReconstructionResult reconstruct_shell(const MeshModel& mesh,
     }
   } else {
     result.outcome = ReconstructionOutcome::AnalysisOnly;
+  }
+
+  if (result.outcome != ReconstructionOutcome::SolidCreated &&
+      result.non_manifold_edge_count > 0 &&
+      result.open_edge_count <= 12) {
+    resolve_tiny_conflict_faces(result, mesh, tolerances, solid_threshold);
+  }
+
+  if (result.outcome != ReconstructionOutcome::SolidCreated &&
+      result.non_manifold_edge_count > 0 &&
+      result.open_edge_count <= 12) {
+    std::vector<std::vector<LoopCandidate>> candidates;
+    candidates.reserve(regions.size());
+    std::vector<std::size_t> selected_indices;
+    selected_indices.reserve(regions.size());
+    for (const PlaneRegion& region : regions) {
+      candidates.push_back(collect_region_loop_candidates(region, boundary_edges, mesh,
+                                                          original_to_snapped, result.vertices,
+                                                          tolerances));
+      selected_indices.push_back(choose_initial_candidate_index(candidates.back()));
+    }
+
+    optimize_region_loop_choices(result, mesh, regions, candidates, selected_indices, tolerances,
+                                 solid_threshold);
+    ReconstructionResult candidate_result;
+    candidate_result.vertices = result.vertices;
+    build_faces_from_selected_candidates(regions, candidates, selected_indices, candidate_result.vertices,
+                                         candidate_result);
+    finalize_shell_reconstruction(candidate_result, mesh, tolerances, solid_threshold);
+    if (is_better_reconstruction_result(candidate_result, result)) {
+      result = std::move(candidate_result);
+    }
   }
   return result;
 }

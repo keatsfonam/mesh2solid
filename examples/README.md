@@ -46,7 +46,7 @@ beyond the tiny golden fixtures in `tests/fixtures/`.
   - source: CloudGripper Robot
   - license: MIT
   - feature focus: repeated gear-tooth structure around a bore
-  - current expected outcome: `shell_only`
+  - current expected outcome: `solid_created`
 - `benchmark/bcn3d_moveo/t4m1e.stl`
   - source: BCN3D Moveo
   - license: MIT
