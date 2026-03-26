@@ -55,6 +55,37 @@ void weld_reconstructed_vertices(ReconstructionResult& result,
   result.vertices = std::move(welded_vertices);
 }
 
+struct FacetedTriangleGeometry {
+  Vec3 a {};
+  Vec3 b {};
+  Vec3 c {};
+  Vec3 normal {};
+  double area {};
+};
+
+std::optional<FacetedTriangleGeometry> compute_faceted_triangle_geometry(const MeshModel& mesh,
+                                                                         const Triangle& triangle) {
+  if (triangle.vertices[0] == triangle.vertices[1] || triangle.vertices[1] == triangle.vertices[2] ||
+      triangle.vertices[2] == triangle.vertices[0]) {
+    return std::nullopt;
+  }
+
+  const Vec3& a = mesh.vertices[triangle.vertices[0]];
+  const Vec3& b = mesh.vertices[triangle.vertices[1]];
+  const Vec3& c = mesh.vertices[triangle.vertices[2]];
+  const double area = triangle_area(a, b, c);
+  if (area <= 1e-12) {
+    return std::nullopt;
+  }
+
+  const Vec3 normal = triangle_normal(a, b, c);
+  if (length_squared(normal) <= 1e-12) {
+    return std::nullopt;
+  }
+
+  return FacetedTriangleGeometry {a, b, c, normal, area};
+}
+
 ReconstructionResult reconstruct_internal_faceted_mesh_fallback(const MeshModel& mesh,
                                                                 const Tolerances& tolerances,
                                                                 double solid_threshold) {
@@ -64,16 +95,9 @@ ReconstructionResult reconstruct_internal_faceted_mesh_fallback(const MeshModel&
   result.faces.reserve(mesh.triangles.size());
 
   for (const Triangle& triangle : mesh.triangles) {
-    if (triangle.vertices[0] == triangle.vertices[1] || triangle.vertices[1] == triangle.vertices[2] ||
-        triangle.vertices[2] == triangle.vertices[0]) {
-      continue;
-    }
-
-    const Vec3& a = mesh.vertices[triangle.vertices[0]];
-    const Vec3& b = mesh.vertices[triangle.vertices[1]];
-    const Vec3& c = mesh.vertices[triangle.vertices[2]];
-    const double geometric_area = triangle_area(a, b, c);
-    if (geometric_area <= 1e-12) {
+    const std::optional<FacetedTriangleGeometry> geometry =
+        compute_faceted_triangle_geometry(mesh, triangle);
+    if (!geometry.has_value()) {
       continue;
     }
 
@@ -81,25 +105,20 @@ ReconstructionResult reconstruct_internal_faceted_mesh_fallback(const MeshModel&
     face.region_id = triangle.region_id;
     face.loops.push_back({triangle.vertices[0], triangle.vertices[1], triangle.vertices[2]});
 
-    Vec3 normal = triangle_normal(a, b, c);
-    if (length_squared(normal) <= 1e-12) {
-      continue;
-    }
-
     Vec3 centroid {};
     for (int vertex_index : triangle.vertices) {
       centroid += mesh.vertices[vertex_index];
     }
     centroid = centroid / 3.0;
 
-    face.fit.normal = normalized(normal);
+    face.fit.normal = geometry->normal;
     face.fit.centroid = centroid;
     face.fit.d = -dot(face.fit.normal, face.fit.centroid);
     face.fit.rms_error = 0.0;
     face.fit.max_error = 0.0;
     face.fit.confidence = 1.0;
     face.confidence = 1.0;
-    face.area = geometric_area;
+    face.area = geometry->area;
     result.faces.push_back(std::move(face));
   }
 
@@ -344,15 +363,7 @@ OcctFallbackBuild build_occt_faceted_shape_single(const MeshModel& mesh,
                                  Standard_False);
 
     for (const Triangle& triangle : mesh.triangles) {
-      if (triangle.vertices[0] == triangle.vertices[1] || triangle.vertices[1] == triangle.vertices[2] ||
-          triangle.vertices[2] == triangle.vertices[0]) {
-        continue;
-      }
-
-      const Vec3& a = mesh.vertices[triangle.vertices[0]];
-      const Vec3& b = mesh.vertices[triangle.vertices[1]];
-      const Vec3& c = mesh.vertices[triangle.vertices[2]];
-      if (triangle_area(a, b, c) <= 1e-12) {
+      if (!compute_faceted_triangle_geometry(mesh, triangle).has_value()) {
         continue;
       }
 
@@ -508,9 +519,11 @@ OcctFallbackBuild build_occt_faceted_shape(const MeshModel& mesh, const Toleranc
 
 ReconstructionResult reconstruct_occt_faceted_mesh_fallback(const MeshModel& mesh,
                                                             const Tolerances& tolerances,
-                                                            double solid_threshold) {
-  ReconstructionResult result =
-      reconstruct_internal_faceted_mesh_fallback(mesh, tolerances, solid_threshold);
+                                                            double solid_threshold,
+                                                            ReconstructionResult result) {
+  if (result.faces.empty()) {
+    result = reconstruct_internal_faceted_mesh_fallback(mesh, tolerances, solid_threshold);
+  }
   result.method = ReconstructionMethod::OcctFacetedMeshFallback;
 
   const OcctFallbackBuild build = build_occt_faceted_shape(mesh, tolerances);
@@ -595,7 +608,7 @@ ReconstructionResult reconstruct_faceted_mesh_fallback(const MeshModel& mesh,
     return result;
   }
   ReconstructionResult occt_result =
-      reconstruct_occt_faceted_mesh_fallback(mesh, tolerances, solid_threshold);
+      reconstruct_occt_faceted_mesh_fallback(mesh, tolerances, solid_threshold, result);
   if (is_better_reconstruction_result(occt_result, result)) {
     result = std::move(occt_result);
   }

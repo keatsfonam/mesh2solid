@@ -7,6 +7,9 @@ import unittest
 import difflib
 import zipfile
 
+from benchmarks.corpus import BENCHMARK_CASES as CORPUS_BENCHMARK_CASES
+from benchmarks.corpus import minimum_outcome_for_profile
+
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_BIN_PATH = REPO_ROOT / "build" / "mesh2solid"
@@ -38,47 +41,28 @@ GOLDEN_CASES = {
     },
 }
 
+CORPUS_CASES_BY_PATH = {
+    case.relative_path: case for case in CORPUS_BENCHMARK_CASES
+}
+TEST_BENCHMARK_PATHS = [
+    "examples/benchmark/3mf_samples/core_box.3mf",
+    "examples/benchmark/3mf_samples/core_cylinder.3mf",
+    "examples/benchmark/3mf_samples/core_multiple_cylinders.3mf",
+    "examples/benchmark/cloudgripper/xy_rail_mount.stl",
+    "examples/benchmark/cloudgripper/arm_holder.stl",
+    "examples/benchmark/cloudgripper/xy_nema_bracket.stl",
+    "examples/benchmark/cloudgripper/arm_linear_pinion_gear.stl",
+    "examples/benchmark/bcn3d_moveo/t4m1e.stl",
+]
 BENCHMARK_CASES = {
-    "3mf_core_box": {
-        "path": EXAMPLES_DIR / "benchmark" / "3mf_samples" / "core_box.3mf",
-        "expected_outcome": "solid_created",
-        "min_regions": 6,
-    },
-    "3mf_core_cylinder": {
-        "path": EXAMPLES_DIR / "benchmark" / "3mf_samples" / "core_cylinder.3mf",
-        "expected_outcome": "solid_created",
-        "min_regions": 3,
-    },
-    "3mf_core_multiple_cylinders": {
-        "path": EXAMPLES_DIR / "benchmark" / "3mf_samples" / "core_multiple_cylinders.3mf",
-        "expected_outcome": "solid_created",
-        "min_regions": 6,
-    },
-    "cloudgripper_xy_rail_mount": {
-        "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "xy_rail_mount.stl",
-        "expected_outcome": "solid_created",
-        "min_regions": 6,
-    },
-    "cloudgripper_arm_holder": {
-        "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "arm_holder.stl",
-        "expected_outcome": "solid_created",
-        "min_regions": 2,
-    },
-    "cloudgripper_xy_nema_bracket": {
-        "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "xy_nema_bracket.stl",
-        "expected_outcome": "solid_created",
-        "min_regions": 25,
-    },
-    "cloudgripper_arm_linear_pinion_gear": {
-        "path": EXAMPLES_DIR / "benchmark" / "cloudgripper" / "arm_linear_pinion_gear.stl",
-        "expected_outcome": "solid_created",
-        "min_regions": 25,
-    },
-    "bcn3d_moveo_t4m1e": {
-        "path": EXAMPLES_DIR / "benchmark" / "bcn3d_moveo" / "t4m1e.stl",
-        "expected_outcome": "solid_created",
-        "min_regions": 25,
-    },
+    pathlib.Path(relative_path).stem: {
+        "path": REPO_ROOT / relative_path,
+        "expected_outcome": minimum_outcome_for_profile(
+            CORPUS_CASES_BY_PATH[relative_path], "host-minimal"
+        ),
+        "min_regions": CORPUS_CASES_BY_PATH[relative_path].min_regions,
+    }
+    for relative_path in TEST_BENCHMARK_PATHS
 }
 
 

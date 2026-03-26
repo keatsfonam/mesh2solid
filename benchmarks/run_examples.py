@@ -9,7 +9,11 @@ import pathlib
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+
+if __package__:
+    from .corpus import BENCHMARK_CASES, BenchmarkCase, minimum_outcome_for_profile
+else:
+    from corpus import BENCHMARK_CASES, BenchmarkCase, minimum_outcome_for_profile
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -20,86 +24,12 @@ OUTCOME_RANK = {
     "solid_created": 2,
 }
 
-
-@dataclass(frozen=True)
-class BenchmarkCase:
-    relative_path: str
-    minimum_outcome: str
-    description: str
-
-    @property
-    def path(self) -> pathlib.Path:
-        return ROOT / self.relative_path
-
-    @property
-    def stem(self) -> str:
-        return self.path.stem
+def case_path(case: BenchmarkCase) -> pathlib.Path:
+    return ROOT / case.relative_path
 
 
-BENCHMARK_CASES = [
-    BenchmarkCase(
-        "examples/benchmark/3mf_samples/core_box.3mf",
-        "solid_created",
-        "basic core 3MF ingest",
-    ),
-    BenchmarkCase(
-        "examples/benchmark/3mf_samples/core_cylinder.3mf",
-        "solid_created",
-        "single curved body through 3MF",
-    ),
-    BenchmarkCase(
-        "examples/benchmark/3mf_samples/core_multiple_cylinders.3mf",
-        "solid_created",
-        "multiple cylindrical build items",
-    ),
-    BenchmarkCase(
-        "examples/benchmark/3mf_samples_hard/cube_gears.3mf",
-        "shell_only",
-        "multi-body gear assembly",
-    ),
-    BenchmarkCase(
-        "examples/benchmark/3mf_samples_hard/heartgears.3mf",
-        "solid_created",
-        "dense single-body gear heart",
-    ),
-    BenchmarkCase(
-        "examples/benchmark/cloudgripper/xy_rail_mount.stl",
-        "solid_created",
-        "mechanical mount with cutouts",
-    ),
-    BenchmarkCase(
-        "examples/benchmark/cloudgripper/arm_holder.stl",
-        "solid_created",
-        "asymmetric holder geometry",
-    ),
-    BenchmarkCase(
-        "examples/benchmark/cloudgripper/xy_nema_bracket.stl",
-        "solid_created",
-        "bracket with multiple openings",
-    ),
-    BenchmarkCase(
-        "examples/benchmark/cloudgripper/arm_linear_pinion_gear.stl",
-        "solid_created",
-        "repeated gear teeth around a bore",
-    ),
-    BenchmarkCase(
-        "examples/benchmark/bcn3d_moveo/t4m1e.stl",
-        "solid_created",
-        "robotic-arm articulation geometry",
-    ),
-    BenchmarkCase(
-        "examples/benchmark/fdm_screws/fdm_nut_and_bolt.stl",
-        "solid_created",
-        "threaded FDM-style nut and bolt pair",
-    ),
-]
-
-EXPECTATION_PROFILE_OVERRIDES = {
-    "host-minimal": {},
-    "docker-full": {
-        "examples/benchmark/3mf_samples_hard/cube_gears.3mf": "solid_created",
-    },
-}
+def case_stem(case: BenchmarkCase) -> str:
+    return case_path(case).stem
 
 
 def parse_args() -> argparse.Namespace:
@@ -137,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--expectation-profile",
         default=os.environ.get("MESH2SOLID_EXPECTATION_PROFILE", "host-minimal"),
-        choices=sorted(EXPECTATION_PROFILE_OVERRIDES.keys()),
+        choices=["host-minimal", "docker-full"],
         help="Benchmark expectation profile to enforce.",
     )
     return parser.parse_args()
@@ -168,18 +98,12 @@ def selected_cases(filters: list[str]) -> list[BenchmarkCase]:
             cases.append(case)
     return cases
 
-
-def minimum_outcome_for_case(case: BenchmarkCase, expectation_profile: str) -> str:
-    overrides = EXPECTATION_PROFILE_OVERRIDES.get(expectation_profile, {})
-    return overrides.get(case.relative_path, case.minimum_outcome)
-
-
 def run_case(case: BenchmarkCase,
              binary: pathlib.Path,
              output_dir: pathlib.Path,
              solid_threshold: float,
              expectation_profile: str) -> dict[str, object]:
-    case_out = output_dir / case.stem
+    case_out = output_dir / case_stem(case)
     if case_out.exists():
         shutil.rmtree(case_out)
 
@@ -187,7 +111,7 @@ def run_case(case: BenchmarkCase,
         [
             str(binary),
             "analyze",
-            str(case.path),
+            str(case_path(case)),
             "--out",
             str(case_out),
             "--preset",
@@ -206,7 +130,7 @@ def run_case(case: BenchmarkCase,
 
     reconstruction = report["reconstruction"]
     actual_outcome = reconstruction["outcome"]
-    expected_minimum = minimum_outcome_for_case(case, expectation_profile)
+    expected_minimum = minimum_outcome_for_profile(case, expectation_profile)
     minimum_ok = OUTCOME_RANK[actual_outcome] >= OUTCOME_RANK[expected_minimum]
     return {
         "case": case,
