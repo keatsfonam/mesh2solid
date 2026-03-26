@@ -1,0 +1,58 @@
+{
+  "input": "tests/fixtures/cube.stl",
+  "preset": "mechanical",
+  "backend": "internal_fallback",
+  "mesh_stats_before": {
+    "vertex_count": 36,
+    "triangle_count": 12,
+    "connected_components": 12,
+    "open_edge_count": 36,
+    "non_manifold_edge_count": 0,
+    "surface_area": 600.00000000,
+    "bbox_diagonal": 17.32050808
+  },
+  "mesh_stats_after": {
+    "vertex_count": 8,
+    "triangle_count": 12,
+    "connected_components": 1,
+    "open_edge_count": 0,
+    "non_manifold_edge_count": 0,
+    "surface_area": 600.00000000,
+    "bbox_diagonal": 17.32050808
+  },
+  "repair": {
+    "welded_vertices_removed": 28,
+    "duplicate_triangles_removed": 0,
+    "degenerate_triangles_removed": 0,
+    "tiny_components_removed": 0,
+    "tiny_component_triangles_removed": 0,
+    "orientation_flips": 0,
+    "warnings": []
+  },
+  "tolerances": {
+    "vertex_weld": 0.20000000,
+    "plane_distance": 2.00000000,
+    "plane_merge_distance": 1.20000000,
+    "collinear_distance": 0.50000000,
+    "normal_angle_degrees": 8.00000000,
+    "merge_angle_degrees": 4.00000000,
+    "parallel_angle_degrees": 3.00000000,
+    "perpendicular_angle_degrees": 3.00000000
+  },
+  "regions": {
+    "count": 6,
+    "unresolved_count": 0
+  },
+  "constraints": {
+    "count": 12
+  },
+  "reconstruction": {
+    "outcome": "solid_created",
+    "face_count": 6,
+    "vertex_count": 8,
+    "shell_gap_score": 0.00000000,
+    "confidence": 1.00000000,
+    "step_written": true,
+    "failure_reasons": []
+  }
+}

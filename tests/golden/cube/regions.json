@@ -1,0 +1,100 @@
+{
+  "regions": [
+    {
+      "id": 0,
+      "triangle_count": 2,
+      "vertex_count": 4,
+      "area": 100.00000000,
+      "unresolved": false,
+      "fit": {
+        "normal": [-0.00000000,-0.00000000,-1.00000000],
+        "centroid": [5.00000000,5.00000000,0.00000000],
+        "d": 0.00000000,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 1.00000000
+      },
+      "neighbors": [2,3,4,5]
+    },
+    {
+      "id": 1,
+      "triangle_count": 2,
+      "vertex_count": 4,
+      "area": 100.00000000,
+      "unresolved": false,
+      "fit": {
+        "normal": [0.00000000,0.00000000,1.00000000],
+        "centroid": [5.00000000,5.00000000,10.00000000],
+        "d": -10.00000000,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 1.00000000
+      },
+      "neighbors": [2,3,4,5]
+    },
+    {
+      "id": 2,
+      "triangle_count": 2,
+      "vertex_count": 4,
+      "area": 100.00000000,
+      "unresolved": false,
+      "fit": {
+        "normal": [0.00000000,-1.00000000,0.00000000],
+        "centroid": [5.00000000,0.00000000,5.00000000],
+        "d": -0.00000000,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 1.00000000
+      },
+      "neighbors": [0,1,4,5]
+    },
+    {
+      "id": 3,
+      "triangle_count": 2,
+      "vertex_count": 4,
+      "area": 100.00000000,
+      "unresolved": false,
+      "fit": {
+        "normal": [0.00000000,1.00000000,0.00000000],
+        "centroid": [5.00000000,10.00000000,5.00000000],
+        "d": -10.00000000,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 1.00000000
+      },
+      "neighbors": [0,1,4,5]
+    },
+    {
+      "id": 4,
+      "triangle_count": 2,
+      "vertex_count": 4,
+      "area": 100.00000000,
+      "unresolved": false,
+      "fit": {
+        "normal": [-1.00000000,0.00000000,0.00000000],
+        "centroid": [0.00000000,5.00000000,5.00000000],
+        "d": -0.00000000,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 1.00000000
+      },
+      "neighbors": [0,1,2,3]
+    },
+    {
+      "id": 5,
+      "triangle_count": 2,
+      "vertex_count": 4,
+      "area": 100.00000000,
+      "unresolved": false,
+      "fit": {
+        "normal": [1.00000000,0.00000000,0.00000000],
+        "centroid": [10.00000000,5.00000000,5.00000000],
+        "d": -10.00000000,
+        "rms_error": 0.00000000,
+        "max_error": 0.00000000,
+        "confidence": 1.00000000
+      },
+      "neighbors": [0,1,2,3]
+    }
+  ]
+}
