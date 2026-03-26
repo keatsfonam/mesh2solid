@@ -5,8 +5,10 @@ LDFLAGS ?= -lz
 SRC := src/main.cpp src/pipeline.cpp
 PIPELINE_IMPL := src/pipeline/io.inc src/pipeline/cgal.inc src/pipeline/reconstruction.inc src/pipeline/fallback.inc src/pipeline/output.inc
 TARGET := build/mesh2solid
+DOCKER_IMAGE ?= mesh2solid-dev:latest
+DOCKER_RUN := docker run --rm -u $$(id -u):$$(id -g) -v "$(CURDIR)":/workspace -w /workspace $(DOCKER_IMAGE)
 
-.PHONY: all clean test golden
+.PHONY: all clean test golden cmake-minimal docker-image docker-build docker-test docker-shell
 
 all: $(TARGET)
 
@@ -22,5 +24,21 @@ test: $(TARGET)
 golden: $(TARGET)
 	python3 tests/update_goldens.py
 
+cmake-minimal:
+	cmake --preset host-minimal
+	cmake --build --preset host-minimal
+
+docker-image:
+	docker build -t $(DOCKER_IMAGE) .
+
+docker-build: docker-image
+	$(DOCKER_RUN) bash -lc "cmake --preset docker-full && cmake --build --preset docker-full"
+
+docker-test: docker-image
+	$(DOCKER_RUN) bash -lc "cmake --preset docker-full && cmake --build --preset docker-full && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 -m unittest discover -s tests -p 'test_*.py'"
+
+docker-shell: docker-image
+	docker run --rm -it -u $$(id -u):$$(id -g) -v "$(CURDIR)":/workspace -w /workspace $(DOCKER_IMAGE) bash
+
 clean:
-	rm -rf build
+	rm -rf build build-cmake

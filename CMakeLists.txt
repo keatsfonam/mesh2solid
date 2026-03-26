@@ -34,10 +34,29 @@ if(MESH2SOLID_ENABLE_CGAL)
 endif()
 
 if(MESH2SOLID_ENABLE_OPENCASCADE)
-  find_package(OpenCASCADE QUIET)
+  find_package(OpenCASCADE QUIET COMPONENTS
+    FoundationClasses
+    ModelingData
+    ModelingAlgorithms
+    Visualization
+    ApplicationFramework
+    DataExchange
+  )
   if(OpenCASCADE_FOUND)
     target_compile_definitions(mesh2solid PRIVATE MESH2SOLID_WITH_OCCT=1)
     target_include_directories(mesh2solid PRIVATE ${OpenCASCADE_INCLUDE_DIR})
-    target_link_libraries(mesh2solid PRIVATE ${OpenCASCADE_LIBRARIES})
+
+    set(MESH2SOLID_OCCT_LIBRARIES
+      ${OpenCASCADE_FoundationClasses_LIBRARIES}
+      ${OpenCASCADE_ModelingData_LIBRARIES}
+      ${OpenCASCADE_ModelingAlgorithms_LIBRARIES}
+      TKXSBase
+      TKSTEPBase
+      TKSTEPAttr
+      TKSTEP209
+      TKSTEP
+    )
+    list(REMOVE_DUPLICATES MESH2SOLID_OCCT_LIBRARIES)
+    target_link_libraries(mesh2solid PRIVATE ${MESH2SOLID_OCCT_LIBRARIES})
   endif()
 endif()

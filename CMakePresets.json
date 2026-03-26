@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "host-minimal",
+      "displayName": "Host Minimal",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-cmake/host-minimal",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "MESH2SOLID_ENABLE_CGAL": "OFF",
+        "MESH2SOLID_ENABLE_OPENCASCADE": "OFF"
+      }
+    },
+    {
+      "name": "docker-full",
+      "displayName": "Docker Full Geometry Stack",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-cmake/docker-full",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "MESH2SOLID_ENABLE_CGAL": "ON",
+        "MESH2SOLID_ENABLE_OPENCASCADE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "host-minimal",
+      "configurePreset": "host-minimal"
+    },
+    {
+      "name": "docker-full",
+      "configurePreset": "docker-full"
+    }
+  ]
+}

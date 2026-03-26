@@ -24,6 +24,31 @@
 
 #include <zlib.h>
 
+#if defined(MESH2SOLID_WITH_CGAL)
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/Shape_regularization/regularize_planes.h>
+#include <CGAL/number_utils.h>
+#include <CGAL/property_map.h>
+#include <boost/property_map/property_map.hpp>
+#endif
+
+#if defined(MESH2SOLID_WITH_OCCT)
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_MakeSolid.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <IFSelect_ReturnStatus.hxx>
+#include <STEPControl_Writer.hxx>
+#include <ShapeFix_Shape.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <TopAbs_ShapeEnum.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Shell.hxx>
+#include <gp_Pnt.hxx>
+#endif
+
 namespace mesh2solid {
 
 namespace {
@@ -1010,6 +1035,8 @@ std::string reconstruction_method_to_string(ReconstructionMethod method) {
       return "analytic_planar";
     case ReconstructionMethod::FacetedMeshFallback:
       return "faceted_mesh_fallback";
+    case ReconstructionMethod::OcctFacetedMeshFallback:
+      return "occt_faceted_mesh_fallback";
   }
   return "analytic_planar";
 }
@@ -1078,7 +1105,7 @@ RunReport analyze(const AnalyzeOptions& options) {
       report.repair.after.open_edge_count == 0 &&
       report.repair.after.non_manifold_edge_count == 0) {
     ReconstructionResult faceted_fallback =
-        reconstruct_faceted_mesh_fallback(report.cleaned_mesh, options.solid_threshold);
+        reconstruct_faceted_mesh_fallback(report.cleaned_mesh, report.tolerances, options.solid_threshold);
     if (is_better_reconstruction_result(faceted_fallback, report.reconstruction)) {
       report.reconstruction = std::move(faceted_fallback);
     }
@@ -1095,8 +1122,18 @@ void write_outputs(const AnalyzeOptions& options, RunReport& report) {
              reconstruction_debug_json(report.reconstruction));
 
   if (report.reconstruction.outcome == ReconstructionOutcome::SolidCreated) {
-    report.reconstruction.step_written =
-        write_step_file(options.output_dir / "reconstruction.step", report.reconstruction);
+    if (report.reconstruction.method == ReconstructionMethod::OcctFacetedMeshFallback) {
+      report.reconstruction.step_written =
+          write_step_file_occt(options.output_dir / "reconstruction.step", report.cleaned_mesh,
+                               report.tolerances);
+      if (!report.reconstruction.step_written) {
+        report.reconstruction.step_written =
+            write_step_file(options.output_dir / "reconstruction.step", report.reconstruction);
+      }
+    } else {
+      report.reconstruction.step_written =
+          write_step_file(options.output_dir / "reconstruction.step", report.reconstruction);
+    }
   } else {
     report.reconstruction.step_written = false;
   }

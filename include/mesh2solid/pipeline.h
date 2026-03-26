@@ -130,6 +130,7 @@ enum class ReconstructionOutcome {
 enum class ReconstructionMethod {
   AnalyticPlanar,
   FacetedMeshFallback,
+  OcctFacetedMeshFallback,
 };
 
 struct ReconstructionResult {

@@ -1,10 +1,4 @@
 #if defined(MESH2SOLID_WITH_CGAL)
-#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
-#include <CGAL/Regularization/regularize_planes.h>
-#include <CGAL/number_utils.h>
-#include <CGAL/property_map.h>
-#include <boost/property_map/property_map.hpp>
-
 struct CgalPlaneIndexMap {
   using key_type = std::size_t;
   using value_type = int;
@@ -53,10 +47,10 @@ PlaneRegularizationReport regularize_plane_regions_with_cgal(const MeshModel& me
   }
 
   CgalPlaneIndexMap plane_index_map {&plane_assignments};
-  CGAL::regularize_planes(points, CGAL::Identity_property_map<Point_3>(), planes,
-                          CGAL::Identity_property_map<Plane_3>(), plane_index_map, Kernel(),
-                          true, true, true, false, tolerances.parallel_angle_degrees,
-                          tolerances.plane_merge_distance);
+  CGAL::Shape_regularization::Planes::regularize_planes(
+      points, CGAL::Identity_property_map<Point_3>(), planes,
+      CGAL::Identity_property_map<Plane_3>(), plane_index_map, Kernel(), true, true, true,
+      false, tolerances.parallel_angle_degrees, tolerances.plane_merge_distance);
 
   std::size_t adjusted_planes = 0;
   for (std::size_t index = 0; index < regions.size(); ++index) {

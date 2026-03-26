@@ -1,0 +1,10 @@
+.git
+.github
+build
+build-cmake
+dist
+tmp
+out
+__pycache__
+*.pyc
+.DS_Store

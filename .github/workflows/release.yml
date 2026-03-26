@@ -32,16 +32,32 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install Linux dependencies
+      - name: Install Linux minimal dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y zlib1g-dev
 
-      - name: Build release binary
+      - name: Build Docker image
+        if: runner.os == 'Linux'
+        run: docker build -t mesh2solid-release .
+
+      - name: Build and test inside Docker
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace \
+            mesh2solid-release \
+            bash -lc "cmake --preset docker-full && cmake --build --preset docker-full && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 -m unittest discover -s tests -p 'test_*.py'"
+
+      - name: Build release binary on host
+        if: runner.os != 'Linux'
         run: make
 
-      - name: Run test suite
+      - name: Run host test suite
+        if: runner.os != 'Linux'
         run: python3 -m unittest discover -s tests -p 'test_*.py'
 
       - name: Package release archive
@@ -52,8 +68,13 @@ jobs:
           os="$(echo "${RUNNER_OS}" | tr '[:upper:]' '[:lower:]')"
           arch="$(echo "${RUNNER_ARCH}" | tr '[:upper:]' '[:lower:]')"
           package="mesh2solid-${tag}-${os}-${arch}"
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            binary="build-cmake/docker-full/mesh2solid"
+          else
+            binary="build/mesh2solid"
+          fi
           mkdir -p "dist/${package}"
-          cp build/mesh2solid "dist/${package}/mesh2solid"
+          cp "${binary}" "dist/${package}/mesh2solid"
           cp README.md "dist/${package}/README.md"
           tar -czf "dist/${package}.tar.gz" -C dist "${package}"
           rm -rf "dist/${package}"

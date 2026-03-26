@@ -32,6 +32,13 @@ make test
 make golden
 ```
 
+Primary full-stack Linux workflow:
+
+```bash
+make docker-test
+make docker-shell
+```
+
 Equivalent direct test command:
 
 ```bash
@@ -39,6 +46,9 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 Use `make golden` only when output changes are intentional. Golden diffs are part of the contract.
+
+Prefer the Docker workflow when working on CGAL/Open CASCADE integration or anything that depends
+on the full geometry stack. Keep the plain `make` path working as the lightweight fallback build.
 
 If you change geometry logic, run at least:
 - `make`

@@ -36,17 +36,41 @@ and the fallback solid path uses the internal faceted reconstruction flow.
 
 ## Build
 
-With the toolchain available in this workspace:
+Docker is the primary Linux development workflow going forward. It gives us a reproducible
+environment with CGAL and Open CASCADE installed without polluting the host.
+
+Build the image and run the full-stack test suite:
+
+```bash
+make docker-test
+```
+
+Open a shell inside the container:
+
+```bash
+make docker-shell
+```
+
+The Docker workflow uses the `docker-full` CMake preset from `CMakePresets.json`.
+
+For a lightweight host-only fallback build:
 
 ```bash
 make
 ```
 
-If you have CMake and optional geometry libraries installed:
+For the host minimal CMake path:
 
 ```bash
-cmake -S . -B build-cmake
-cmake --build build-cmake
+cmake --preset host-minimal
+cmake --build --preset host-minimal
+```
+
+If you have CGAL and Open CASCADE installed on the host and want the full stack without Docker:
+
+```bash
+cmake --preset docker-full
+cmake --build --preset docker-full
 ```
 
 ## Usage
@@ -97,6 +121,13 @@ or:
 
 ```bash
 make golden
+```
+
+When using a non-default binary, both test helpers honor:
+
+```bash
+MESH2SOLID_BIN=/path/to/mesh2solid
+MESH2SOLID_SKIP_BUILD=1
 ```
 
 ## Architecture

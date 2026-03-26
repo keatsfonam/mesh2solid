@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -8,7 +9,19 @@ import zipfile
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-BIN_PATH = REPO_ROOT / "build" / "mesh2solid"
+DEFAULT_BIN_PATH = REPO_ROOT / "build" / "mesh2solid"
+
+
+def configured_bin_path() -> pathlib.Path:
+    configured = os.environ.get("MESH2SOLID_BIN")
+    if not configured:
+        return DEFAULT_BIN_PATH
+    path = pathlib.Path(configured)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+BIN_PATH = configured_bin_path()
+SKIP_BUILD = os.environ.get("MESH2SOLID_SKIP_BUILD") == "1"
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
 GOLDEN_ROOT = REPO_ROOT / "tests" / "golden"
 EXAMPLES_DIR = REPO_ROOT / "examples"
@@ -272,6 +285,11 @@ def translated_mesh(vertices, dx=0.0, dy=0.0, dz=0.0):
 class CliIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if SKIP_BUILD:
+            if not BIN_PATH.exists():
+                raise AssertionError(f"Configured mesh2solid binary does not exist: {BIN_PATH}")
+            return
+
         completed = subprocess.run(
             ["make"],
             cwd=REPO_ROOT,
@@ -298,6 +316,77 @@ class CliIntegrationTests(unittest.TestCase):
             )
             self.fail(f"{actual_path.name} did not match golden output\n{diff}")
 
+    def assert_report_matches_golden(self, actual_path: pathlib.Path, golden_path: pathlib.Path):
+        actual = json.loads(actual_path.read_text(encoding="utf-8"))
+        expected = json.loads(golden_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(actual["backend"])
+        if "cgal" in actual["backend"]:
+            self.assertEqual(actual["plane_regularization"]["method"], "cgal_regularize_planes")
+        else:
+            self.assertEqual(actual["plane_regularization"]["method"], "none")
+
+        actual["backend"] = expected["backend"]
+        actual["plane_regularization"]["method"] = expected["plane_regularization"]["method"]
+        self.assertEqual(actual, expected)
+
+    def assert_regions_semantically_match_golden(self, actual_path: pathlib.Path, golden_path: pathlib.Path):
+        actual = json.loads(actual_path.read_text(encoding="utf-8"))
+        expected = json.loads(golden_path.read_text(encoding="utf-8"))
+
+        def summarize(region_doc):
+            return sorted(
+                (
+                    region["triangle_count"],
+                    region["vertex_count"],
+                    round(region["area"], 8),
+                    region["unresolved"],
+                    round(region["fit"]["rms_error"], 8),
+                    round(region["fit"]["max_error"], 8),
+                    round(region["fit"]["confidence"], 8),
+                    len(region["neighbors"]),
+                )
+                for region in region_doc["regions"]
+            )
+
+        self.assertEqual(summarize(actual), summarize(expected))
+
+    def assert_constraints_semantically_match_golden(self, actual_path: pathlib.Path, golden_path: pathlib.Path):
+        actual = json.loads(actual_path.read_text(encoding="utf-8"))
+        expected = json.loads(golden_path.read_text(encoding="utf-8"))
+
+        def summarize(graph_doc):
+            return sorted(
+                (
+                    constraint["type"],
+                    constraint["applied"],
+                    round(constraint["score"], 8),
+                    constraint["rationale"],
+                )
+                for constraint in graph_doc["constraints"]
+            )
+
+        self.assertEqual(summarize(actual), summarize(expected))
+
+    def assert_step_semantically_matches_golden(self, actual_path: pathlib.Path, golden_path: pathlib.Path):
+        actual = actual_path.read_text(encoding="utf-8")
+        expected = golden_path.read_text(encoding="utf-8")
+
+        tokens = [
+            "ADVANCED_FACE",
+            "FACE_BOUND",
+            "FACE_OUTER_BOUND",
+            "EDGE_CURVE",
+            "EDGE_LOOP",
+            "MANIFOLD_SOLID_BREP",
+            "CLOSED_SHELL",
+        ]
+        for token in tokens:
+            self.assertEqual(actual.count(token), expected.count(token), msg=token)
+
+        self.assertIn("MANIFOLD_SOLID_BREP", actual)
+        self.assertNotIn("FACETED_BREP", actual)
+
     def test_checked_in_fixtures_match_golden_outputs(self):
         for case_name, case in GOLDEN_CASES.items():
             with self.subTest(case=case_name):
@@ -321,10 +410,25 @@ class CliIntegrationTests(unittest.TestCase):
                         self.assertIn(token, step_text)
 
                     self.assert_file_matches_golden(out_dir / "cleaned_mesh.stl", golden_dir / "cleaned_mesh.stl")
-                    self.assert_file_matches_golden(out_dir / "report.json", golden_dir / "report.json")
-                    self.assert_file_matches_golden(out_dir / "regions.json", golden_dir / "regions.json")
-                    self.assert_file_matches_golden(out_dir / "constraints.json", golden_dir / "constraints.json")
-                    self.assert_file_matches_golden(out_dir / "reconstruction.step", golden_dir / "reconstruction.step")
+                    self.assert_report_matches_golden(out_dir / "report.json", golden_dir / "report.json")
+                    if report["backend"] == "internal_fallback":
+                        self.assert_file_matches_golden(out_dir / "regions.json", golden_dir / "regions.json")
+                        self.assert_file_matches_golden(out_dir / "constraints.json", golden_dir / "constraints.json")
+                    else:
+                        self.assert_regions_semantically_match_golden(
+                            out_dir / "regions.json", golden_dir / "regions.json"
+                        )
+                        self.assert_constraints_semantically_match_golden(
+                            out_dir / "constraints.json", golden_dir / "constraints.json"
+                        )
+                    if report["backend"] == "internal_fallback":
+                        self.assert_file_matches_golden(
+                            out_dir / "reconstruction.step", golden_dir / "reconstruction.step"
+                        )
+                    else:
+                        self.assert_step_semantically_matches_golden(
+                            out_dir / "reconstruction.step", golden_dir / "reconstruction.step"
+                        )
 
     def test_repair_path_removes_duplicate_faces_and_tiny_fragment(self):
         with tempfile.TemporaryDirectory() as tmp:

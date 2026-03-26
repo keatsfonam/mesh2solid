@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import shutil
 import subprocess
@@ -11,7 +12,18 @@ import tempfile
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-BIN_PATH = REPO_ROOT / "build" / "mesh2solid"
+DEFAULT_BIN_PATH = REPO_ROOT / "build" / "mesh2solid"
+
+
+def configured_bin_path() -> pathlib.Path:
+    configured = os.environ.get("MESH2SOLID_BIN")
+    if not configured:
+        return DEFAULT_BIN_PATH
+    path = pathlib.Path(configured)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+BIN_PATH = configured_bin_path()
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
 GOLDEN_ROOT = REPO_ROOT / "tests" / "golden"
 
@@ -97,6 +109,10 @@ def run(cmd: list[str], *, cwd: pathlib.Path) -> None:
 
 def ensure_binary(build: bool) -> None:
     if BIN_PATH.exists() and not build:
+        return
+    if os.environ.get("MESH2SOLID_SKIP_BUILD") == "1":
+        if not BIN_PATH.exists():
+            raise RuntimeError(f"Configured mesh2solid binary does not exist: {BIN_PATH}")
         return
     run(["make"], cwd=REPO_ROOT)
 
