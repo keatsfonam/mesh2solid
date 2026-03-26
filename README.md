@@ -39,6 +39,12 @@ and the fallback solid path uses the internal faceted reconstruction flow.
 Docker is the primary Linux development workflow going forward. It gives us a reproducible
 environment with CGAL and Open CASCADE installed without polluting the host.
 
+Build the Docker image and the full-stack binary:
+
+```bash
+make docker-build
+```
+
 Build the image and run the full-stack test suite:
 
 ```bash
@@ -78,6 +84,12 @@ For a lightweight host-only fallback build:
 make
 ```
 
+That produces:
+
+```bash
+build/mesh2solid
+```
+
 For the host minimal CMake path:
 
 ```bash
@@ -98,6 +110,22 @@ cmake --build --preset docker-full
 build/mesh2solid analyze part.stl --out out --preset mechanical --solid-threshold 0.75
 build/mesh2solid analyze part.3mf --out out --preset mechanical --solid-threshold 0.75
 ```
+
+For the Docker full-stack binary after `make docker-build`:
+
+```bash
+build-cmake/docker-full/mesh2solid analyze part.stl --out out --preset mechanical --solid-threshold 0.75
+build-cmake/docker-full/mesh2solid analyze part.3mf --out out --preset mechanical --solid-threshold 0.75
+```
+
+Each analysis run writes:
+
+- `cleaned_mesh.stl`
+- `report.json`
+- `regions.json`
+- `constraints.json`
+- `reconstruction_debug.json`
+- `reconstruction.step` when reconstruction reaches `solid_created`
 
 ## CI And Release
 
