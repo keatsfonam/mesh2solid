@@ -63,10 +63,8 @@ BENCHMARK_CASES = {
     },
     "bcn3d_moveo_t4m1e": {
         "path": EXAMPLES_DIR / "benchmark" / "bcn3d_moveo" / "t4m1e.stl",
-        "expected_outcome": "shell_only",
+        "expected_outcome": "solid_created",
         "min_regions": 25,
-        "max_open_edges": 14,
-        "max_non_manifold_edges": 0,
     },
 }
 

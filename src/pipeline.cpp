@@ -3147,15 +3147,20 @@ void add_small_planar_gap_caps(std::vector<ReconstructedFace>& faces,
         }
         const double thin_strip_width_limit =
             std::max(tolerances.plane_distance * 0.35, tolerances.vertex_weld * 3.0);
+        const bool thin_strip =
+            total_perimeter > 1e-9 && (face.area / total_perimeter) <= thin_strip_width_limit;
         if (face.area > max_cap_area &&
-            (total_perimeter <= 1e-9 || (face.area / total_perimeter) > thin_strip_width_limit)) {
+            !thin_strip) {
           return false;
         }
 
         if (max_distance > tolerances.plane_distance * 0.25) {
+          const std::size_t max_triangulated_vertices = thin_strip ? 8 : 6;
+          const double max_triangulated_distance =
+              tolerances.plane_distance * (thin_strip ? 2.5 : 1.25);
           if (face.loops.size() != 1 || face.loops.front().size() < 4 ||
-              face.loops.front().size() > 6 ||
-              max_distance > tolerances.plane_distance * 1.25) {
+              face.loops.front().size() > max_triangulated_vertices ||
+              max_distance > max_triangulated_distance) {
             return false;
           }
 

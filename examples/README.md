@@ -51,7 +51,7 @@ beyond the tiny golden fixtures in `tests/fixtures/`.
   - source: BCN3D Moveo
   - license: MIT
   - feature focus: more complex robotic-arm articulation geometry
-  - current expected outcome: `shell_only` with the open-edge count reduced to 14
+  - current expected outcome: `solid_created`
 
 Repository sources:
 
