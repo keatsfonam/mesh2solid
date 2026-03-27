@@ -242,6 +242,102 @@ def box_with_round_bore_mesh(
     return vertices, faces
 
 
+def obround_slot_support(angle, half_span, radius):
+    direction_x = math.cos(angle)
+    direction_y = math.sin(angle)
+    candidates = []
+
+    if abs(direction_y) > 1e-9:
+        for y in (-radius, radius):
+            t = y / direction_y
+            if t > 1e-9:
+                x = direction_x * t
+                if -half_span - 1e-7 <= x <= half_span + 1e-7:
+                    candidates.append((t, x, y))
+
+    for center_x in (-half_span, half_span):
+        b = -2.0 * center_x * direction_x
+        c = center_x * center_x - radius * radius
+        discriminant = b * b - 4.0 * c
+        if discriminant < -1e-9:
+            continue
+        discriminant = max(discriminant, 0.0)
+        for t in (
+            (-b - math.sqrt(discriminant)) / 2.0,
+            (-b + math.sqrt(discriminant)) / 2.0,
+        ):
+            if t <= 1e-9:
+                continue
+            x = direction_x * t
+            y = direction_y * t
+            if center_x < 0.0 and x > -half_span + 1e-7:
+                continue
+            if center_x > 0.0 and x < half_span - 1e-7:
+                continue
+            candidates.append((t, x, y))
+
+    if not candidates:
+        raise RuntimeError("No obround-slot ray intersection")
+
+    _, x, y = min(candidates, key=lambda item: item[0])
+    return x, y
+
+
+def block_with_obround_slot_mesh(
+    half_size=24.0,
+    slot_radius=4.0,
+    slot_half_span=10.0,
+    height=18.0,
+    segments=24,
+):
+    vertices = []
+    vertex_ids = {}
+    faces = []
+
+    def vertex_id(point):
+        key = tuple(round(value, 8) for value in point)
+        if key not in vertex_ids:
+            vertex_ids[key] = len(vertices)
+            vertices.append(tuple(float(value) for value in point))
+        return vertex_ids[key]
+
+    def square_support(angle):
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
+        scale = max(abs(cosine), abs(sine))
+        return half_size * cosine / scale, half_size * sine / scale
+
+    outer_bottom = []
+    outer_top = []
+    inner_bottom = []
+    inner_top = []
+    for index in range(segments):
+        angle = 2.0 * math.pi * index / segments
+        outer_x, outer_y = square_support(angle)
+        inner_x, inner_y = obround_slot_support(angle, slot_half_span, slot_radius)
+        outer_bottom.append(vertex_id((outer_x, outer_y, 0.0)))
+        outer_top.append(vertex_id((outer_x, outer_y, height)))
+        inner_bottom.append(vertex_id((inner_x, inner_y, 0.0)))
+        inner_top.append(vertex_id((inner_x, inner_y, height)))
+
+    for index in range(segments):
+        next_index = (index + 1) % segments
+
+        faces.append((outer_top[index], outer_top[next_index], inner_top[next_index]))
+        faces.append((outer_top[index], inner_top[next_index], inner_top[index]))
+
+        faces.append((outer_bottom[index], inner_bottom[next_index], outer_bottom[next_index]))
+        faces.append((outer_bottom[index], inner_bottom[index], inner_bottom[next_index]))
+
+        faces.append((outer_bottom[index], outer_bottom[next_index], outer_top[next_index]))
+        faces.append((outer_bottom[index], outer_top[next_index], outer_top[index]))
+
+        faces.append((inner_bottom[index], inner_top[next_index], inner_bottom[next_index]))
+        faces.append((inner_bottom[index], inner_top[index], inner_top[next_index]))
+
+    return vertices, faces
+
+
 def blind_bore_mesh(
     half_size=20.0,
     radius=8.0,
@@ -1291,6 +1387,26 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(step_text.count("ADVANCED_FACE"), 7)
             self.assertEqual(step_text.count("PLANE("), 6)
             self.assertGreaterEqual(step_text.count("FACE_BOUND"), 3)
+
+    def test_prismatic_block_with_obround_slot_has_deterministic_baseline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "obround_slot.stl"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = block_with_obround_slot_mesh()
+            write_ascii_stl(mesh_path, vertices, faces)
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertNotIn("FACETED_BREP", step_text)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 0)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 14)
+            self.assertEqual(step_text.count("PLANE("), 14)
 
     def test_prismatic_block_with_blind_bore_exports_clean_cylinder(self):
         with tempfile.TemporaryDirectory() as tmp:
