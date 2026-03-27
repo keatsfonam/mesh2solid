@@ -441,23 +441,32 @@ struct SimplePrismaticMixedThroughFeatureExport {
   std::vector<int> outer_face_indices;
 };
 
-struct SimplePrismaticMixedThroughCounterboreFeature {
+// Shared-cap axial through features all reduce to the same 2.5D model:
+// paired cap loops plus an axial radius profile that is constant, stepped, or tapered.
+enum class PrismaticAxialThroughFeatureKind {
+  bore,
+  countersink,
+  counterbore,
+};
+
+struct SimplePrismaticAxialThroughFeature {
   double top_inner_area {};
   double bottom_inner_area {};
-  bool has_counterbore {};
   double step_outer_area {};
   double step_inner_area {};
+  PrismaticAxialThroughFeatureKind kind {PrismaticAxialThroughFeatureKind::bore};
   SimpleCylinderPrimitive bore {};
+  SimpleConicalFrustumPrimitive countersink {};
   SimpleCylinderPrimitive upper_bore {};
   SimpleCylinderPrimitive lower_bore {};
 };
 
-struct SimplePrismaticMixedThroughCounterboreExport {
+struct SimplePrismaticAxialThroughFeatureExport {
   int top_face_index {};
   int bottom_face_index {};
   std::vector<int> top_outer_loop;
   std::vector<int> bottom_outer_loop;
-  std::vector<SimplePrismaticMixedThroughCounterboreFeature> features;
+  std::vector<SimplePrismaticAxialThroughFeature> features;
   std::vector<int> outer_face_indices;
 };
 
@@ -5350,8 +5359,8 @@ detect_simple_prismatic_mixed_through_feature_export(const ReconstructionResult&
   return std::nullopt;
 }
 
-std::optional<SimplePrismaticMixedThroughCounterboreExport>
-detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionResult& reconstruction) {
+std::optional<SimplePrismaticAxialThroughFeatureExport>
+detect_simple_prismatic_axial_through_feature_export(const ReconstructionResult& reconstruction) {
   if (reconstruction.faces.size() < 10 || reconstruction.vertices.size() < 32) {
     return std::nullopt;
   }
@@ -5366,7 +5375,7 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
       step_candidates.push_back(static_cast<int>(face_index));
     }
   }
-  if (cap_candidates.size() < 2 || step_candidates.empty()) {
+  if (cap_candidates.size() < 2) {
     return std::nullopt;
   }
 
@@ -5446,17 +5455,19 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
         struct PendingFeature {
           std::size_t top_loop_index {};
           std::size_t bottom_loop_index {};
-          bool has_counterbore {};
+          PrismaticAxialThroughFeatureKind kind {PrismaticAxialThroughFeatureKind::bore};
           CircleFit2D top_circle {};
           CircleFit2D bottom_circle {};
           std::size_t step_candidate_index {};
           CircleFit2D step_outer_circle {};
           CircleFit2D step_inner_circle {};
+          CircleFit2D step_circle {};
           double step_outer_area {};
           double step_inner_area {};
           double step_plane {};
           std::vector<int> step_outer_loop;
           std::vector<int> step_inner_loop;
+          std::unordered_set<int> step_vertices;
         };
 
         std::vector<bool> matched_bottom(fitted_bottom.size(), false);
@@ -5464,8 +5475,20 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
         std::vector<PendingFeature> pending;
         pending.reserve(fitted_top.size());
         const double pair_tolerance = std::max(max_top_radius * 0.03, 1e-4);
-        bool saw_bore = false;
-        bool saw_counterbore = false;
+        bool saw_profile_change = false;
+        std::map<long long, std::vector<int>> plane_buckets;
+        const double plane_bucket_tolerance = std::max(pair_tolerance * 0.5, 1e-4);
+        for (std::size_t vertex_index = 0; vertex_index < reconstruction.vertices.size(); ++vertex_index) {
+          const double coordinate = dot(reconstruction.vertices[vertex_index], axis);
+          if (coordinate >= top_plane - plane_bucket_tolerance ||
+              coordinate <= bottom_plane + plane_bucket_tolerance) {
+            continue;
+          }
+          const long long bucket =
+              static_cast<long long>(std::llround(coordinate / plane_bucket_tolerance));
+          plane_buckets[bucket].push_back(static_cast<int>(vertex_index));
+        }
+        std::unordered_set<int> assigned_step_vertices;
 
         for (const LoopCircle& top_loop : fitted_top) {
           if (top_loop.circle.radius <= 1e-6 || top_loop.circle.max_error > pair_tolerance) {
@@ -5504,19 +5527,20 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
           matched_bottom[bottom_match] = true;
           const LoopCircle& bottom_loop = fitted_bottom[bottom_match];
           if (std::abs(top_loop.circle.radius - bottom_loop.circle.radius) <= pair_tolerance) {
-            saw_bore = true;
             pending.push_back(PendingFeature {
                 top_loop.loop_index,
                 bottom_loop.loop_index,
-                false,
+                PrismaticAxialThroughFeatureKind::bore,
                 top_loop.circle,
                 bottom_loop.circle,
                 0,
                 CircleFit2D {},
                 CircleFit2D {},
+                CircleFit2D {},
                 0.0,
                 0.0,
                 0.0,
+                {},
                 {},
                 {},
             });
@@ -5579,31 +5603,102 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
               best_pending = PendingFeature {
                   top_loop.loop_index,
                   bottom_loop.loop_index,
-                  true,
+                  PrismaticAxialThroughFeatureKind::counterbore,
                   top_loop.circle,
                   bottom_loop.circle,
                   step_index,
                   *step_outer_circle,
                   *step_inner_circle,
+                  CircleFit2D {},
                   step_outer_area,
                   step_inner_area,
                   step_plane,
                   step_outer_loop,
                   step_inner_loop,
+                  {},
               };
               step_match = step_index;
             }
           }
-          if (step_match == step_candidates.size()) {
+          if (step_match != step_candidates.size()) {
+            matched_step[step_match] = true;
+            saw_profile_change = true;
+            pending.push_back(std::move(best_pending));
+            continue;
+          }
+
+          double best_countersink_score = std::numeric_limits<double>::infinity();
+          std::optional<PendingFeature> countersink_pending;
+          for (const auto& [bucket, bucket_vertices] : plane_buckets) {
+            const double step_plane = static_cast<double>(bucket) * plane_bucket_tolerance;
+            if (step_plane <= bottom_plane + pair_tolerance ||
+                step_plane >= top_plane - pair_tolerance) {
+              continue;
+            }
+
+            std::unordered_set<int> step_vertices;
+            std::vector<Vec2> step_points;
+            for (int vertex_index : bucket_vertices) {
+              if (assigned_step_vertices.contains(vertex_index)) {
+                continue;
+              }
+              const Vec2 point = project_to_basis(reconstruction.vertices[vertex_index], axis_basis);
+              const Vec2 center_delta {point.x - bottom_loop.circle.center.x,
+                                       point.y - bottom_loop.circle.center.y};
+              const double radial_distance =
+                  std::sqrt(center_delta.x * center_delta.x + center_delta.y * center_delta.y);
+              if (std::abs(radial_distance - bottom_loop.circle.radius) <= pair_tolerance * 1.5) {
+                step_vertices.insert(vertex_index);
+                step_points.push_back(point);
+              }
+            }
+            if (step_vertices.size() < 8) {
+              continue;
+            }
+
+            const std::optional<CircleFit2D> step_circle = fit_circle_2d(step_points);
+            if (!step_circle.has_value() ||
+                std::abs(step_circle->radius - bottom_loop.circle.radius) > pair_tolerance ||
+                step_circle->max_error > pair_tolerance ||
+                !circle_fit_centers_coincident(*step_circle, bottom_loop.circle, pair_tolerance)) {
+              continue;
+            }
+
+            const double score = step_circle->max_error + std::abs(top_plane - step_plane);
+            if (score < best_countersink_score) {
+              best_countersink_score = score;
+              countersink_pending = PendingFeature {
+                  top_loop.loop_index,
+                  bottom_loop.loop_index,
+                  PrismaticAxialThroughFeatureKind::countersink,
+                  top_loop.circle,
+                  bottom_loop.circle,
+                  0,
+                  CircleFit2D {},
+                  CircleFit2D {},
+                  *step_circle,
+                  0.0,
+                  0.0,
+                  step_plane,
+                  {},
+                  {},
+                  std::move(step_vertices),
+              };
+            }
+          }
+          if (!countersink_pending.has_value()) {
             fit_valid = false;
             break;
           }
 
-          matched_step[step_match] = true;
-          saw_counterbore = true;
-          pending.push_back(std::move(best_pending));
+          for (int vertex_index : countersink_pending->step_vertices) {
+            assigned_step_vertices.insert(vertex_index);
+          }
+          saw_profile_change = true;
+          pending.push_back(std::move(*countersink_pending));
         }
-        if (!fit_valid || pending.size() != fitted_top.size() || !saw_bore || !saw_counterbore) {
+        if (!fit_valid || pending.size() != fitted_top.size() || pending.size() < 2 ||
+            !saw_profile_change) {
           continue;
         }
 
@@ -5620,7 +5715,7 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
 
           bool is_step = false;
           for (const PendingFeature& feature : pending) {
-            if (feature.has_counterbore &&
+            if (feature.kind == PrismaticAxialThroughFeatureKind::counterbore &&
                 static_cast<int>(face_index) == step_candidates[feature.step_candidate_index]) {
               is_step = true;
               break;
@@ -5639,7 +5734,7 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
           bool matched_feature = false;
           for (std::size_t feature_index = 0; feature_index < pending.size(); ++feature_index) {
             const PendingFeature& feature = pending[feature_index];
-            if (!feature.has_counterbore) {
+            if (feature.kind == PrismaticAxialThroughFeatureKind::bore) {
               std::unordered_set<int> bore_vertices;
               bore_vertices.insert(top_inner_loops[feature.top_loop_index].begin(),
                                    top_inner_loops[feature.top_loop_index].end());
@@ -5675,13 +5770,22 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
             }
 
             std::unordered_set<int> upper_vertices;
-            upper_vertices.insert(top_inner_loops[feature.top_loop_index].begin(),
-                                  top_inner_loops[feature.top_loop_index].end());
-            upper_vertices.insert(feature.step_outer_loop.begin(), feature.step_outer_loop.end());
             std::unordered_set<int> lower_vertices;
-            lower_vertices.insert(feature.step_inner_loop.begin(), feature.step_inner_loop.end());
-            lower_vertices.insert(bottom_inner_loops[feature.bottom_loop_index].begin(),
-                                  bottom_inner_loops[feature.bottom_loop_index].end());
+            if (feature.kind == PrismaticAxialThroughFeatureKind::counterbore) {
+              upper_vertices.insert(top_inner_loops[feature.top_loop_index].begin(),
+                                    top_inner_loops[feature.top_loop_index].end());
+              upper_vertices.insert(feature.step_outer_loop.begin(), feature.step_outer_loop.end());
+              lower_vertices.insert(feature.step_inner_loop.begin(), feature.step_inner_loop.end());
+              lower_vertices.insert(bottom_inner_loops[feature.bottom_loop_index].begin(),
+                                    bottom_inner_loops[feature.bottom_loop_index].end());
+            } else {
+              upper_vertices.insert(top_inner_loops[feature.top_loop_index].begin(),
+                                    top_inner_loops[feature.top_loop_index].end());
+              upper_vertices.insert(feature.step_vertices.begin(), feature.step_vertices.end());
+              lower_vertices.insert(feature.step_vertices.begin(), feature.step_vertices.end());
+              lower_vertices.insert(bottom_inner_loops[feature.bottom_loop_index].begin(),
+                                    bottom_inner_loops[feature.bottom_loop_index].end());
+            }
 
             bool all_upper = true;
             bool all_lower = true;
@@ -5746,11 +5850,11 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
           continue;
         }
 
-        std::vector<SimplePrismaticMixedThroughCounterboreFeature> features;
+        std::vector<SimplePrismaticAxialThroughFeature> features;
         features.reserve(pending.size());
         for (std::size_t feature_index = 0; feature_index < pending.size(); ++feature_index) {
           const PendingFeature& feature = pending[feature_index];
-          if (!feature.has_counterbore) {
+          if (feature.kind == PrismaticAxialThroughFeatureKind::bore) {
             if (bore_face_counts[feature_index] < 8) {
               valid = false;
               break;
@@ -5770,12 +5874,58 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
               break;
             }
 
-            SimplePrismaticMixedThroughCounterboreFeature exported;
+            SimplePrismaticAxialThroughFeature exported;
             exported.top_inner_area = top_inner_areas[feature.top_loop_index];
             exported.bottom_inner_area = bottom_inner_areas[feature.bottom_loop_index];
-            exported.has_counterbore = false;
+            exported.kind = PrismaticAxialThroughFeatureKind::bore;
             exported.bore =
                 SimpleCylinderPrimitive {base_center, axis, normalized(radial), radius, top_plane - bottom_plane};
+            features.push_back(std::move(exported));
+            continue;
+          }
+
+          if (feature.kind == PrismaticAxialThroughFeatureKind::countersink) {
+            if (upper_face_counts[feature_index] < 8 || lower_face_counts[feature_index] < 8 ||
+                feature.step_vertices.empty()) {
+              valid = false;
+              break;
+            }
+            const Vec2 center {
+                (feature.top_circle.center.x + feature.bottom_circle.center.x +
+                 feature.step_circle.center.x) / 3.0,
+                (feature.top_circle.center.y + feature.bottom_circle.center.y +
+                 feature.step_circle.center.y) / 3.0,
+            };
+            const Vec3 axis_origin = axis_basis.u * center.x + axis_basis.v * center.y;
+            const Vec3 step_center = axis_origin + axis * feature.step_plane;
+            const Vec3 bottom_center = axis_origin + axis * bottom_plane;
+            const int reference_vertex = *feature.step_vertices.begin();
+            const Vec3 seam_vector = reconstruction.vertices[reference_vertex] - step_center;
+            const Vec3 radial = seam_vector - axis * dot(seam_vector, axis);
+            if (length_squared(radial) <= 1e-12) {
+              valid = false;
+              break;
+            }
+
+            SimplePrismaticAxialThroughFeature exported;
+            exported.top_inner_area = top_inner_areas[feature.top_loop_index];
+            exported.bottom_inner_area = bottom_inner_areas[feature.bottom_loop_index];
+            exported.kind = PrismaticAxialThroughFeatureKind::countersink;
+            exported.countersink = SimpleConicalFrustumPrimitive {
+                step_center,
+                axis,
+                normalized(radial),
+                feature.bottom_circle.radius,
+                feature.top_circle.radius,
+                top_plane - feature.step_plane,
+            };
+            exported.bore = SimpleCylinderPrimitive {
+                bottom_center,
+                axis,
+                normalized(radial),
+                feature.bottom_circle.radius,
+                feature.step_plane - bottom_plane,
+            };
             features.push_back(std::move(exported));
             continue;
           }
@@ -5804,10 +5954,10 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
             break;
           }
 
-          SimplePrismaticMixedThroughCounterboreFeature exported;
+          SimplePrismaticAxialThroughFeature exported;
           exported.top_inner_area = top_inner_areas[feature.top_loop_index];
           exported.bottom_inner_area = bottom_inner_areas[feature.bottom_loop_index];
-          exported.has_counterbore = true;
+          exported.kind = PrismaticAxialThroughFeatureKind::counterbore;
           exported.step_outer_area = feature.step_outer_area;
           exported.step_inner_area = feature.step_inner_area;
           exported.upper_bore = SimpleCylinderPrimitive {
@@ -5830,7 +5980,7 @@ detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionRes
           continue;
         }
 
-        SimplePrismaticMixedThroughCounterboreExport export_result;
+        SimplePrismaticAxialThroughFeatureExport export_result;
         export_result.top_face_index = top_face_index;
         export_result.bottom_face_index = bottom_face_index;
         export_result.top_outer_loop = top_outer_loop;
@@ -15151,10 +15301,10 @@ bool write_step_file_prismatic_mixed_through_features(
   return true;
 }
 
-bool write_step_file_prismatic_mixed_through_counterbores(
+bool write_step_file_prismatic_axial_through_features(
     const std::filesystem::path& path,
     const ReconstructionResult& reconstruction,
-    const SimplePrismaticMixedThroughCounterboreExport& feature_export) {
+    const SimplePrismaticAxialThroughFeatureExport& feature_export) {
   StepBuilder step;
   const StepExportContext context_ids = build_step_export_context(step);
 
@@ -15222,12 +15372,15 @@ bool write_step_file_prismatic_mixed_through_counterbores(
 
   std::vector<int> top_outer_loop = feature_export.top_outer_loop;
   std::vector<int> bottom_outer_loop = feature_export.bottom_outer_loop;
-  const Vec3 axis = feature_export.features.front().has_counterbore
-                        ? feature_export.features.front().upper_bore.axis
-                        : feature_export.features.front().bore.axis;
-  const Vec3 ref_direction = feature_export.features.front().has_counterbore
-                                 ? feature_export.features.front().upper_bore.ref_direction
-                                 : feature_export.features.front().bore.ref_direction;
+  const SimplePrismaticAxialThroughFeature& reference_feature = feature_export.features.front();
+  const Vec3 axis = reference_feature.kind == PrismaticAxialThroughFeatureKind::counterbore
+                        ? reference_feature.upper_bore.axis
+                        : reference_feature.bore.axis;
+  const Vec3 ref_direction = reference_feature.kind == PrismaticAxialThroughFeatureKind::counterbore
+                                 ? reference_feature.upper_bore.ref_direction
+                                 : reference_feature.kind == PrismaticAxialThroughFeatureKind::countersink
+                                       ? reference_feature.countersink.ref_direction
+                                       : reference_feature.bore.ref_direction;
   const PlaneBasis axis_basis = basis_from_normal(axis);
   if (projected_loop_area(top_outer_loop, reconstruction.vertices, axis_basis) < 0.0) {
     std::reverse(top_outer_loop.begin(), top_outer_loop.end());
@@ -15236,14 +15389,16 @@ bool write_step_file_prismatic_mixed_through_counterbores(
     std::reverse(bottom_outer_loop.begin(), bottom_outer_loop.end());
   }
 
-  const Vec3 top_plane_origin = feature_export.features.front().has_counterbore
-                                    ? feature_export.features.front().upper_bore.base_center +
-                                          axis * feature_export.features.front().upper_bore.height
-                                    : feature_export.features.front().bore.base_center +
-                                          axis * feature_export.features.front().bore.height;
-  const Vec3 bottom_plane_origin = feature_export.features.front().has_counterbore
-                                       ? feature_export.features.front().lower_bore.base_center
-                                       : feature_export.features.front().bore.base_center;
+  const Vec3 top_plane_origin =
+      reference_feature.kind == PrismaticAxialThroughFeatureKind::counterbore
+          ? reference_feature.upper_bore.base_center + axis * reference_feature.upper_bore.height
+          : reference_feature.kind == PrismaticAxialThroughFeatureKind::countersink
+                ? reference_feature.countersink.base_center + axis * reference_feature.countersink.height
+                : reference_feature.bore.base_center + axis * reference_feature.bore.height;
+  const Vec3 bottom_plane_origin =
+      reference_feature.kind == PrismaticAxialThroughFeatureKind::counterbore
+          ? reference_feature.lower_bore.base_center
+          : reference_feature.bore.base_center;
   const StepPlaneSurface top_plane =
       add_step_plane_surface(step, top_plane_origin, axis, ref_direction);
   const StepPlaneSurface bottom_plane =
@@ -15255,10 +15410,281 @@ bool write_step_file_prismatic_mixed_through_counterbores(
     std::vector<int> shell_faces;
   };
 
+  auto add_plane_circle_pcurve = [&](const StepPlaneSurface& plane,
+                                     const Vec3& circle_center,
+                                     double radius,
+                                     const Vec3& circle_ref_direction) -> int {
+    const Vec3 delta = circle_center - plane.origin;
+    const double center_u = dot(delta, plane.basis.u);
+    const double center_v = dot(delta, plane.basis.v);
+    const double ref_u_raw = dot(circle_ref_direction, plane.basis.u);
+    const double ref_v_raw = dot(circle_ref_direction, plane.basis.v);
+    const double ref_scale = std::sqrt(ref_u_raw * ref_u_raw + ref_v_raw * ref_v_raw);
+    const double ref_u = ref_scale <= 1e-12 ? 1.0 : ref_u_raw / ref_scale;
+    const double ref_v = ref_scale <= 1e-12 ? 0.0 : ref_v_raw / ref_scale;
+
+    const int center_2d =
+        step.add("CARTESIAN_POINT('',(" + format_double(center_u) + "," +
+                 format_double(center_v) + "))");
+    const int ref_2d = step.add("DIRECTION('',(" + format_double(ref_u) + "," +
+                                format_double(ref_v) + "))");
+    const int circle_axis_2d =
+        step.add("AXIS2_PLACEMENT_2D(''," + step.ref(center_2d) + "," + step.ref(ref_2d) + ")");
+    const int circle_2d =
+        step.add("CIRCLE(''," + step.ref(circle_axis_2d) + "," + format_double(radius) + ")");
+    const int circle_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(circle_2d) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    return step.add("PCURVE(''," + step.ref(plane.plane_id) + "," + step.ref(circle_repr) + ")");
+  };
+
+  auto add_countersink_bundle =
+      [&](const SimplePrismaticAxialThroughFeature& feature) -> FeatureBundle {
+    const SimpleConicalFrustumPrimitive& countersink = feature.countersink;
+    const SimpleCylinderPrimitive& bore = feature.bore;
+    const Vec3 top_center = countersink.base_center + countersink.axis * countersink.height;
+    const Vec3 step_center = countersink.base_center;
+    const Vec3 bottom_center = bore.base_center;
+    const double cone_height = countersink.height;
+    const double radius_delta = countersink.top_radius - countersink.base_radius;
+    const double cone_angle = std::atan2(radius_delta, cone_height);
+    const double slant_height = std::sqrt(cone_height * cone_height + radius_delta * radius_delta);
+    if (slant_height <= 1e-12) {
+      throw std::runtime_error("Cannot export zero-height axial countersink");
+    }
+
+    const Vec3 top_seam = top_center + countersink.ref_direction * countersink.top_radius;
+    const Vec3 step_seam = step_center + countersink.ref_direction * countersink.base_radius;
+    const Vec3 bottom_seam = bottom_center + bore.ref_direction * bore.radius;
+
+    const int top_seam_point = step.add("CARTESIAN_POINT('',(" + format_double(top_seam.x) + "," +
+                                       format_double(top_seam.y) + "," +
+                                       format_double(top_seam.z) + "))");
+    const int step_seam_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(step_seam.x) + "," +
+                 format_double(step_seam.y) + "," + format_double(step_seam.z) + "))");
+    const int bottom_seam_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(bottom_seam.x) + "," +
+                 format_double(bottom_seam.y) + "," + format_double(bottom_seam.z) + "))");
+    const int top_seam_vertex = step.add("VERTEX_POINT(''," + step.ref(top_seam_point) + ")");
+    const int step_seam_vertex = step.add("VERTEX_POINT(''," + step.ref(step_seam_point) + ")");
+    const int bottom_seam_vertex = step.add("VERTEX_POINT(''," + step.ref(bottom_seam_point) + ")");
+
+    const int axis_direction_id =
+        step.add("DIRECTION('',(" + format_double(countersink.axis.x) + "," +
+                 format_double(countersink.axis.y) + "," + format_double(countersink.axis.z) + "))");
+    const int ref_direction_id =
+        step.add("DIRECTION('',(" + format_double(countersink.ref_direction.x) + "," +
+                 format_double(countersink.ref_direction.y) + "," +
+                 format_double(countersink.ref_direction.z) + "))");
+    const int top_center_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(top_center.x) + "," +
+                 format_double(top_center.y) + "," + format_double(top_center.z) + "))");
+    const int step_center_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(step_center.x) + "," +
+                 format_double(step_center.y) + "," + format_double(step_center.z) + "))");
+    const int bottom_center_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(bottom_center.x) + "," +
+                 format_double(bottom_center.y) + "," + format_double(bottom_center.z) + "))");
+
+    const int cone_axis =
+        step.add("AXIS2_PLACEMENT_3D(''," + step.ref(step_center_point) + "," +
+                 step.ref(axis_direction_id) + "," + step.ref(ref_direction_id) + ")");
+    const int cone_surface =
+        step.add("CONICAL_SURFACE(''," + step.ref(cone_axis) + "," +
+                 format_double(countersink.base_radius) + "," + format_double(cone_angle) + ")");
+    const int top_axis =
+        step.add("AXIS2_PLACEMENT_3D(''," + step.ref(top_center_point) + "," +
+                 step.ref(axis_direction_id) + "," + step.ref(ref_direction_id) + ")");
+    const int step_axis =
+        step.add("AXIS2_PLACEMENT_3D(''," + step.ref(step_center_point) + "," +
+                 step.ref(axis_direction_id) + "," + step.ref(ref_direction_id) + ")");
+    const int cylinder_axis =
+        step.add("AXIS2_PLACEMENT_3D(''," + step.ref(bottom_center_point) + "," +
+                 step.ref(axis_direction_id) + "," + step.ref(ref_direction_id) + ")");
+    const int cylinder_surface =
+        step.add("CYLINDRICAL_SURFACE(''," + step.ref(cylinder_axis) + "," +
+                 format_double(bore.radius) + ")");
+    const int bottom_axis =
+        step.add("AXIS2_PLACEMENT_3D(''," + step.ref(bottom_center_point) + "," +
+                 step.ref(axis_direction_id) + "," + step.ref(ref_direction_id) + ")");
+
+    const int top_circle =
+        step.add("CIRCLE(''," + step.ref(top_axis) + "," + format_double(countersink.top_radius) + ")");
+    const int top_cone_pcurve_point =
+        step.add("CARTESIAN_POINT('',(0.0," + format_double(slant_height) + "))");
+    const int u_dir = step.add("DIRECTION('',(1.0,0.0))");
+    const int u_vec = step.add("VECTOR(''," + step.ref(u_dir) + ",1.0)");
+    const int top_cone_pcurve_line =
+        step.add("LINE(''," + step.ref(top_cone_pcurve_point) + "," + step.ref(u_vec) + ")");
+    const int top_cone_pcurve_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(top_cone_pcurve_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int top_cone_pcurve =
+        step.add("PCURVE(''," + step.ref(cone_surface) + "," + step.ref(top_cone_pcurve_repr) + ")");
+    const int top_plane_pcurve =
+        add_plane_circle_pcurve(top_plane, top_center, countersink.top_radius, countersink.ref_direction);
+    const int top_surface_curve =
+        step.add("SURFACE_CURVE(''," + step.ref(top_circle) + ",(" + step.ref(top_cone_pcurve) +
+                 "," + step.ref(top_plane_pcurve) + "),.PCURVE_S1.)");
+    const int top_edge_curve =
+        step.add("EDGE_CURVE(''," + step.ref(top_seam_vertex) + "," + step.ref(top_seam_vertex) + "," +
+                 step.ref(top_surface_curve) + ",.T.)");
+
+    const int transition_circle =
+        step.add("CIRCLE(''," + step.ref(step_axis) + "," + format_double(countersink.base_radius) + ")");
+    const int cone_transition_point = step.add("CARTESIAN_POINT('',(0.0,0.0))");
+    const int cone_transition_line =
+        step.add("LINE(''," + step.ref(cone_transition_point) + "," + step.ref(u_vec) + ")");
+    const int cone_transition_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(cone_transition_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int cone_transition_pcurve =
+        step.add("PCURVE(''," + step.ref(cone_surface) + "," + step.ref(cone_transition_repr) + ")");
+    const int cylinder_top_pcurve_point =
+        step.add("CARTESIAN_POINT('',(0.0," + format_double(bore.height) + "))");
+    const int cylinder_top_pcurve_line =
+        step.add("LINE(''," + step.ref(cylinder_top_pcurve_point) + "," + step.ref(u_vec) + ")");
+    const int cylinder_top_pcurve_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(cylinder_top_pcurve_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int cylinder_top_pcurve =
+        step.add("PCURVE(''," + step.ref(cylinder_surface) + "," + step.ref(cylinder_top_pcurve_repr) + ")");
+    const int transition_surface_curve =
+        step.add("SURFACE_CURVE(''," + step.ref(transition_circle) + ",(" +
+                 step.ref(cone_transition_pcurve) + "," + step.ref(cylinder_top_pcurve) +
+                 "),.PCURVE_S1.)");
+    const int transition_edge_curve =
+        step.add("EDGE_CURVE(''," + step.ref(step_seam_vertex) + "," + step.ref(step_seam_vertex) + "," +
+                 step.ref(transition_surface_curve) + ",.T.)");
+
+    const int bottom_circle =
+        step.add("CIRCLE(''," + step.ref(bottom_axis) + "," + format_double(bore.radius) + ")");
+    const int bottom_cyl_pcurve_geom_point = step.add("CARTESIAN_POINT('',(0.0,0.0))");
+    const int bottom_cyl_pcurve_line =
+        step.add("LINE(''," + step.ref(bottom_cyl_pcurve_geom_point) + "," + step.ref(u_vec) + ")");
+    const int bottom_cyl_pcurve_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(bottom_cyl_pcurve_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int bottom_cyl_pcurve =
+        step.add("PCURVE(''," + step.ref(cylinder_surface) + "," + step.ref(bottom_cyl_pcurve_repr) + ")");
+    const int bottom_plane_pcurve =
+        add_plane_circle_pcurve(bottom_plane, bottom_center, bore.radius, bore.ref_direction);
+    const int bottom_surface_curve =
+        step.add("SURFACE_CURVE(''," + step.ref(bottom_circle) + ",(" +
+                 step.ref(bottom_cyl_pcurve) + "," + step.ref(bottom_plane_pcurve) +
+                 "),.PCURVE_S1.)");
+    const int bottom_edge_curve =
+        step.add("EDGE_CURVE(''," + step.ref(bottom_seam_vertex) + "," +
+                 step.ref(bottom_seam_vertex) + "," + step.ref(bottom_surface_curve) + ",.T.)");
+
+    const int cone_seam_line_dir =
+        step.add("DIRECTION('',(" + format_double(countersink.axis.x) + "," +
+                 format_double(countersink.axis.y) + "," + format_double(countersink.axis.z) + "))");
+    const int cone_seam_line_vec = step.add("VECTOR(''," + step.ref(cone_seam_line_dir) + ",1.0)");
+    const int cone_seam_line =
+        step.add("LINE(''," + step.ref(step_seam_point) + "," + step.ref(cone_seam_line_vec) + ")");
+    const int cone_seam_u0_point = step.add("CARTESIAN_POINT('',(0.0,0.0))");
+    const int cone_seam_v_dir = step.add("DIRECTION('',(0.0,1.0))");
+    const int cone_seam_v_vec = step.add("VECTOR(''," + step.ref(cone_seam_v_dir) + ",1.0)");
+    const int cone_seam_u0_line =
+        step.add("LINE(''," + step.ref(cone_seam_u0_point) + "," + step.ref(cone_seam_v_vec) + ")");
+    const int cone_seam_u0_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(cone_seam_u0_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int cone_seam_u0_pcurve =
+        step.add("PCURVE(''," + step.ref(cone_surface) + "," + step.ref(cone_seam_u0_repr) + ")");
+    const int cone_seam_u1_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(2.0 * kPi) + ",0.0))");
+    const int cone_seam_u1_line =
+        step.add("LINE(''," + step.ref(cone_seam_u1_point) + "," + step.ref(cone_seam_v_vec) + ")");
+    const int cone_seam_u1_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(cone_seam_u1_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int cone_seam_u1_pcurve =
+        step.add("PCURVE(''," + step.ref(cone_surface) + "," + step.ref(cone_seam_u1_repr) + ")");
+    const int cone_seam_curve =
+        step.add("SEAM_CURVE(''," + step.ref(cone_seam_line) + ",(" + step.ref(cone_seam_u1_pcurve) +
+                 "," + step.ref(cone_seam_u0_pcurve) + "),.PCURVE_S1.)");
+    const int cone_seam_edge_curve =
+        step.add("EDGE_CURVE(''," + step.ref(step_seam_vertex) + "," + step.ref(top_seam_vertex) + "," +
+                 step.ref(cone_seam_curve) + ",.T.)");
+
+    const double circumference = 2.0 * kPi * bore.radius;
+    const int cylinder_seam_line =
+        step.add("LINE(''," + step.ref(bottom_seam_point) + "," + step.ref(cone_seam_line_vec) + ")");
+    const int cylinder_seam_u0_point = step.add("CARTESIAN_POINT('',(0.0,0.0))");
+    const int cylinder_seam_u0_line =
+        step.add("LINE(''," + step.ref(cylinder_seam_u0_point) + "," + step.ref(cone_seam_v_vec) + ")");
+    const int cylinder_seam_u0_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(cylinder_seam_u0_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int cylinder_seam_u0_pcurve =
+        step.add("PCURVE(''," + step.ref(cylinder_surface) + "," + step.ref(cylinder_seam_u0_repr) + ")");
+    const int cylinder_seam_u1_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(circumference) + ",0.0))");
+    const int cylinder_seam_u1_line =
+        step.add("LINE(''," + step.ref(cylinder_seam_u1_point) + "," + step.ref(cone_seam_v_vec) + ")");
+    const int cylinder_seam_u1_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(cylinder_seam_u1_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int cylinder_seam_u1_pcurve =
+        step.add("PCURVE(''," + step.ref(cylinder_surface) + "," + step.ref(cylinder_seam_u1_repr) + ")");
+    const int cylinder_seam_curve =
+        step.add("SEAM_CURVE(''," + step.ref(cylinder_seam_line) + ",(" +
+                 step.ref(cylinder_seam_u1_pcurve) + "," + step.ref(cylinder_seam_u0_pcurve) +
+                 "),.PCURVE_S1.)");
+    const int cylinder_seam_edge_curve =
+        step.add("EDGE_CURVE(''," + step.ref(bottom_seam_vertex) + "," +
+                 step.ref(step_seam_vertex) + "," + step.ref(cylinder_seam_curve) + ",.T.)");
+
+    const int cone_top_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(top_edge_curve) + ",.F.)");
+    const int cone_seam_forward =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(cone_seam_edge_curve) + ",.F.)");
+    const int cone_bottom_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(transition_edge_curve) + ",.T.)");
+    const int cone_seam_backward =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(cone_seam_edge_curve) + ",.T.)");
+    const int cone_lateral_loop =
+        step.add("EDGE_LOOP('',(" + step.ref(cone_top_oriented) + "," +
+                 step.ref(cone_seam_forward) + "," + step.ref(cone_bottom_oriented) + "," +
+                 step.ref(cone_seam_backward) + "))");
+    const int cone_lateral_bound =
+        step.add("FACE_BOUND(''," + step.ref(cone_lateral_loop) + ",.T.)");
+    const int cone_lateral_face =
+        step.add("ADVANCED_FACE('',(" + step.ref(cone_lateral_bound) + ")," +
+                 step.ref(cone_surface) + ",.T.)");
+
+    const int cylinder_top_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(transition_edge_curve) + ",.F.)");
+    const int cylinder_seam_forward =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(cylinder_seam_edge_curve) + ",.F.)");
+    const int cylinder_bottom_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(bottom_edge_curve) + ",.T.)");
+    const int cylinder_seam_backward =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(cylinder_seam_edge_curve) + ",.T.)");
+    const int cylinder_lateral_loop =
+        step.add("EDGE_LOOP('',(" + step.ref(cylinder_top_oriented) + "," +
+                 step.ref(cylinder_seam_forward) + "," + step.ref(cylinder_bottom_oriented) + "," +
+                 step.ref(cylinder_seam_backward) + "))");
+    const int cylinder_lateral_bound =
+        step.add("FACE_BOUND(''," + step.ref(cylinder_lateral_loop) + ",.T.)");
+    const int cylinder_lateral_face =
+        step.add("ADVANCED_FACE('',(" + step.ref(cylinder_lateral_bound) + ")," +
+                 step.ref(cylinder_surface) + ",.T.)");
+
+    FeatureBundle bundle;
+    bundle.top_edge_curve = top_edge_curve;
+    bundle.bottom_edge_curve = bottom_edge_curve;
+    bundle.shell_faces = {cone_lateral_face, cylinder_lateral_face};
+    return bundle;
+  };
+
   std::vector<FeatureBundle> bundles;
   bundles.reserve(feature_export.features.size());
-  for (const SimplePrismaticMixedThroughCounterboreFeature& feature : feature_export.features) {
-    if (!feature.has_counterbore) {
+  for (const SimplePrismaticAxialThroughFeature& feature : feature_export.features) {
+    if (feature.kind == PrismaticAxialThroughFeatureKind::bore) {
       const StepCylinderBundle bore_bundle =
           add_step_cylinder_bundle(step, context_ids, feature.bore, top_plane, bottom_plane);
       FeatureBundle bundle;
@@ -15266,6 +15692,11 @@ bool write_step_file_prismatic_mixed_through_counterbores(
       bundle.bottom_edge_curve = bore_bundle.bottom_edge_curve;
       bundle.shell_faces = {bore_bundle.lateral_face};
       bundles.push_back(std::move(bundle));
+      continue;
+    }
+
+    if (feature.kind == PrismaticAxialThroughFeatureKind::countersink) {
+      bundles.push_back(add_countersink_bundle(feature));
       continue;
     }
 
@@ -16362,29 +16793,11 @@ bool write_step_file(const std::filesystem::path& path,
     return write_step_file_prismatic_countersink(path, reconstruction, *countersink);
   }
 
-  if (const std::optional<SimplePrismaticMultiCountersinkExport> multi_countersink =
-          detect_simple_prismatic_multi_countersink_export(reconstruction);
-      multi_countersink.has_value()) {
-    return write_step_file_prismatic_multi_countersink(path, reconstruction, *multi_countersink);
-  }
-
-  if (const std::optional<SimplePrismaticMultiCounterboreExport> multi_counterbore =
-          detect_simple_prismatic_multi_counterbore_export(reconstruction);
-      multi_counterbore.has_value()) {
-    return write_step_file_prismatic_multi_counterbore(path, reconstruction, *multi_counterbore);
-  }
-
-  if (const std::optional<SimplePrismaticMixedThroughCounterboreExport> mixed_through_counterbores =
-          detect_simple_prismatic_mixed_through_counterbore_export(reconstruction);
-      mixed_through_counterbores.has_value()) {
-    return write_step_file_prismatic_mixed_through_counterbores(
-        path, reconstruction, *mixed_through_counterbores);
-  }
-
-  if (const std::optional<SimplePrismaticMixedThroughFeatureExport> mixed_through_features =
-          detect_simple_prismatic_mixed_through_feature_export(reconstruction);
-      mixed_through_features.has_value()) {
-    return write_step_file_prismatic_mixed_through_features(path, reconstruction, *mixed_through_features);
+  if (const std::optional<SimplePrismaticAxialThroughFeatureExport> axial_through_features =
+          detect_simple_prismatic_axial_through_feature_export(reconstruction);
+      axial_through_features.has_value()) {
+    return write_step_file_prismatic_axial_through_features(
+        path, reconstruction, *axial_through_features);
   }
 
   if (const std::optional<GenericCylindricalFeatureExport> generic_features =
