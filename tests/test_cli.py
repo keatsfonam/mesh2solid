@@ -614,6 +614,20 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertIn("CYLINDRICAL_SURFACE", step_text)
             self.assertIn("CIRCLE(", step_text)
 
+    def test_multiple_cylinders_export_cylindrical_surfaces(self):
+        mesh_path = EXAMPLES_DIR / "benchmark" / "3mf_samples" / "core_multiple_cylinders.3mf"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            out_dir = tmp_path / "out"
+
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertGreaterEqual(step_text.count("CYLINDRICAL_SURFACE"), 2)
+            self.assertGreaterEqual(step_text.count("CIRCLE("), 4)
+            self.assertLess(step_text.count("ADVANCED_FACE"), report["reconstruction"]["face_count"])
+
 
 if __name__ == "__main__":
     unittest.main()

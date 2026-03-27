@@ -11,254 +11,27 @@ std::string step_header() {
   return output.str();
 }
 
-struct CircleFit2DExport {
-  Vec2 center {};
-  double radius {};
-  double rms_error {};
-  double max_error {};
-};
-
-struct SimpleCylinderExport {
-  Vec3 base_center {};
-  Vec3 axis {};
-  Vec3 ref_direction {};
-  double radius {};
-  double height {};
-};
-
-bool solve_linear_3x3_export(double matrix[3][4], std::array<double, 3>& solution) {
-  for (int column = 0; column < 3; ++column) {
-    int pivot = column;
-    double pivot_value = std::abs(matrix[pivot][column]);
-    for (int row = column + 1; row < 3; ++row) {
-      const double candidate = std::abs(matrix[row][column]);
-      if (candidate > pivot_value) {
-        pivot = row;
-        pivot_value = candidate;
-      }
-    }
-    if (pivot_value <= 1e-12) {
-      return false;
-    }
-    if (pivot != column) {
-      for (int entry = column; entry < 4; ++entry) {
-        std::swap(matrix[column][entry], matrix[pivot][entry]);
-      }
-    }
-
-    const double divisor = matrix[column][column];
-    for (int entry = column; entry < 4; ++entry) {
-      matrix[column][entry] /= divisor;
-    }
-    for (int row = 0; row < 3; ++row) {
-      if (row == column) {
-        continue;
-      }
-      const double factor = matrix[row][column];
-      if (std::abs(factor) <= 1e-12) {
-        continue;
-      }
-      for (int entry = column; entry < 4; ++entry) {
-        matrix[row][entry] -= factor * matrix[column][entry];
-      }
-    }
-  }
-
-  solution = {matrix[0][3], matrix[1][3], matrix[2][3]};
-  return true;
-}
-
-std::optional<CircleFit2DExport> fit_circle_2d_export(const std::vector<Vec2>& points) {
-  if (points.size() < 3) {
+std::optional<std::vector<SimpleCylinderPrimitive>> collect_simple_cylinder_primitives(
+    const MeshModel& mesh,
+    const Tolerances& tolerances) {
+  const std::vector<std::vector<int>> components = collect_triangle_components(mesh);
+  if (components.empty()) {
     return std::nullopt;
   }
 
-  double sum_x = 0.0;
-  double sum_y = 0.0;
-  double sum_xx = 0.0;
-  double sum_yy = 0.0;
-  double sum_xy = 0.0;
-  double sum_xxx = 0.0;
-  double sum_yyy = 0.0;
-  double sum_xxy = 0.0;
-  double sum_xyy = 0.0;
-
-  for (const Vec2& point : points) {
-    const double x = point.x;
-    const double y = point.y;
-    const double xx = x * x;
-    const double yy = y * y;
-    sum_x += x;
-    sum_y += y;
-    sum_xx += xx;
-    sum_yy += yy;
-    sum_xy += x * y;
-    sum_xxx += xx * x;
-    sum_yyy += yy * y;
-    sum_xxy += xx * y;
-    sum_xyy += x * yy;
-  }
-
-  double system[3][4] = {
-      {sum_xx, sum_xy, sum_x, -(sum_xxx + sum_xyy)},
-      {sum_xy, sum_yy, sum_y, -(sum_xxy + sum_yyy)},
-      {sum_x, sum_y, static_cast<double>(points.size()), -(sum_xx + sum_yy)},
-  };
-  std::array<double, 3> solution {};
-  if (!solve_linear_3x3_export(system, solution)) {
-    return std::nullopt;
-  }
-
-  const Vec2 center {-0.5 * solution[0], -0.5 * solution[1]};
-  const double radius_squared = center.x * center.x + center.y * center.y - solution[2];
-  if (radius_squared <= 1e-12) {
-    return std::nullopt;
-  }
-
-  CircleFit2DExport fit;
-  fit.center = center;
-  fit.radius = std::sqrt(radius_squared);
-  double error_sum = 0.0;
-  for (const Vec2& point : points) {
-    const double dx = point.x - fit.center.x;
-    const double dy = point.y - fit.center.y;
-    const double error = std::abs(std::sqrt(dx * dx + dy * dy) - fit.radius);
-    error_sum += error * error;
-    fit.max_error = std::max(fit.max_error, error);
-  }
-  fit.rms_error = std::sqrt(error_sum / static_cast<double>(points.size()));
-  return fit;
-}
-
-std::optional<SimpleCylinderExport> detect_simple_cylinder_export(
-    const ReconstructionResult& reconstruction) {
-  if (reconstruction.faces.size() < 10 || reconstruction.vertices.size() < 12) {
-    return std::nullopt;
-  }
-
-  std::vector<int> candidate_caps;
-  for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
-    const ReconstructedFace& face = reconstruction.faces[face_index];
-    if (face.loops.size() == 1 && face.loops.front().size() >= 8) {
-      candidate_caps.push_back(static_cast<int>(face_index));
+  std::vector<SimpleCylinderPrimitive> cylinders;
+  cylinders.reserve(components.size());
+  for (const std::vector<int>& component : components) {
+    const MeshModel component_mesh = extract_triangle_component_mesh(mesh, component);
+    const std::optional<SimpleCylinderPrimitive> cylinder =
+        detect_simple_cylinder_component(component_mesh, tolerances);
+    if (!cylinder.has_value()) {
+      return std::nullopt;
     }
-  }
-  if (candidate_caps.size() < 2) {
-    return std::nullopt;
+    cylinders.push_back(*cylinder);
   }
 
-  std::sort(candidate_caps.begin(), candidate_caps.end(), [&reconstruction](int lhs, int rhs) {
-    return reconstruction.faces[lhs].area > reconstruction.faces[rhs].area;
-  });
-  if (candidate_caps.size() > 6) {
-    candidate_caps.resize(6);
-  }
-
-  for (std::size_t i = 0; i < candidate_caps.size(); ++i) {
-    for (std::size_t j = i + 1; j < candidate_caps.size(); ++j) {
-      const ReconstructedFace& face_a = reconstruction.faces[candidate_caps[i]];
-      const ReconstructedFace& face_b = reconstruction.faces[candidate_caps[j]];
-      const double angle = angle_degrees_unsigned(face_a.fit.normal, face_b.fit.normal);
-      if (angle > 8.0) {
-        continue;
-      }
-
-      Vec3 axis = normalized(face_a.fit.normal);
-      if (dot(axis, face_a.fit.centroid - face_b.fit.centroid) < 0.0) {
-        axis = axis * -1.0;
-      }
-      const PlaneBasis basis = basis_from_normal(axis);
-
-      const auto project_loop = [&](const std::vector<int>& loop) {
-        std::vector<Vec2> projected;
-        projected.reserve(loop.size());
-        for (int vertex_index : loop) {
-          const Vec3& vertex = reconstruction.vertices[vertex_index];
-          projected.push_back({dot(vertex, basis.u), dot(vertex, basis.v)});
-        }
-        return projected;
-      };
-
-      const std::optional<CircleFit2DExport> circle_a = fit_circle_2d_export(project_loop(face_a.loops.front()));
-      const std::optional<CircleFit2DExport> circle_b = fit_circle_2d_export(project_loop(face_b.loops.front()));
-      if (!circle_a.has_value() || !circle_b.has_value()) {
-        continue;
-      }
-
-      const double radius = (circle_a->radius + circle_b->radius) * 0.5;
-      if (radius <= 1e-6) {
-        continue;
-      }
-
-      const double radius_tolerance = std::max(radius * 0.03, 1e-4);
-      if (std::abs(circle_a->radius - circle_b->radius) > radius_tolerance ||
-          circle_a->max_error > radius_tolerance || circle_b->max_error > radius_tolerance) {
-        continue;
-      }
-
-      const Vec2 center_delta {circle_a->center.x - circle_b->center.x,
-                               circle_a->center.y - circle_b->center.y};
-      if (std::sqrt(center_delta.x * center_delta.x + center_delta.y * center_delta.y) >
-          radius_tolerance) {
-        continue;
-      }
-
-      const double plane_a = dot(face_a.fit.centroid, axis);
-      const double plane_b = dot(face_b.fit.centroid, axis);
-      const double top_plane = std::max(plane_a, plane_b);
-      const double bottom_plane = std::min(plane_a, plane_b);
-      const double height = top_plane - bottom_plane;
-      if (height <= radius_tolerance) {
-        continue;
-      }
-
-      bool all_side_faces_match = true;
-      for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
-        if (static_cast<int>(face_index) == candidate_caps[i] ||
-            static_cast<int>(face_index) == candidate_caps[j]) {
-          continue;
-        }
-        const ReconstructedFace& side_face = reconstruction.faces[face_index];
-        if (side_face.loops.size() != 1 || side_face.loops.front().size() != 4) {
-          all_side_faces_match = false;
-          break;
-        }
-
-        int top_vertices = 0;
-        int bottom_vertices = 0;
-        for (int vertex_index : side_face.loops.front()) {
-          const double coordinate = dot(reconstruction.vertices[vertex_index], axis);
-          if (std::abs(coordinate - top_plane) <= radius_tolerance) {
-            ++top_vertices;
-          } else if (std::abs(coordinate - bottom_plane) <= radius_tolerance) {
-            ++bottom_vertices;
-          }
-        }
-        if (top_vertices != 2 || bottom_vertices != 2) {
-          all_side_faces_match = false;
-          break;
-        }
-      }
-      if (!all_side_faces_match) {
-        continue;
-      }
-
-      const Vec2 center {
-          (circle_a->center.x + circle_b->center.x) * 0.5,
-          (circle_a->center.y + circle_b->center.y) * 0.5,
-      };
-      const Vec3 axis_origin = basis.u * center.x + basis.v * center.y;
-      return SimpleCylinderExport {
-          axis_origin + axis * bottom_plane,
-          axis,
-          basis.u,
-          radius,
-          height,
-      };
-    }
-  }
-
-  return std::nullopt;
+  return cylinders;
 }
 
 class StepBuilder {
@@ -280,13 +53,18 @@ class StepBuilder {
   }
 
  private:
-  int next_id_ {1};
+ int next_id_ {1};
   std::vector<std::string> entities_;
 };
 
-bool write_step_file_simple_cylinder(const std::filesystem::path& path,
-                                     const SimpleCylinderExport& cylinder) {
-  StepBuilder step;
+struct StepExportContext {
+  int product_shape {};
+  int context {};
+  int context_2d {};
+  int global_axis {};
+};
+
+StepExportContext build_step_export_context(StepBuilder& step) {
   const int application_context = step.add(
       "APPLICATION_CONTEXT('configuration controlled 3d designs of mechanical parts and assemblies')");
   const int application_protocol =
@@ -326,6 +104,12 @@ bool write_step_file_simple_cylinder(const std::filesystem::path& path,
       step.add("AXIS2_PLACEMENT_3D(''," + step.ref(origin) + "," + step.ref(z_direction) + "," +
                step.ref(x_direction) + ")");
 
+  return StepExportContext {product_shape, context, context_2d, global_axis};
+}
+
+int add_step_cylinder_solid(StepBuilder& step,
+                            const StepExportContext& context_ids,
+                            const SimpleCylinderPrimitive& cylinder) {
   const Vec3 top_center = cylinder.base_center + cylinder.axis * cylinder.height;
   const Vec3 bottom_seam = cylinder.base_center + cylinder.ref_direction * cylinder.radius;
   const Vec3 top_seam = top_center + cylinder.ref_direction * cylinder.radius;
@@ -376,7 +160,7 @@ bool write_step_file_simple_cylinder(const std::filesystem::path& path,
                                            step.ref(top_cyl_pcurve_vec) + ")");
   const int top_cyl_pcurve_repr =
       step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(top_cyl_pcurve_line) + ")," +
-               step.ref(context_2d) + ")");
+               step.ref(context_ids.context_2d) + ")");
   const int top_cyl_pcurve = step.add("PCURVE(''," + step.ref(cylinder_surface) + "," +
                                       step.ref(top_cyl_pcurve_repr) + ")");
 
@@ -388,7 +172,7 @@ bool write_step_file_simple_cylinder(const std::filesystem::path& path,
                                      format_double(cylinder.radius) + ")");
   const int top_circle_repr =
       step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(top_circle_2d) + ")," +
-               step.ref(context_2d) + ")");
+               step.ref(context_ids.context_2d) + ")");
   const int top_plane_pcurve = step.add("PCURVE(''," + step.ref(top_plane) + "," +
                                         step.ref(top_circle_repr) + ")");
   const int top_surface_curve = step.add("SURFACE_CURVE(''," + step.ref(top_circle) + ",(" +
@@ -414,7 +198,7 @@ bool write_step_file_simple_cylinder(const std::filesystem::path& path,
                                     step.ref(seam_v_vec) + ")");
   const int seam_u0_repr =
       step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(seam_u0_line) + ")," +
-               step.ref(context_2d) + ")");
+               step.ref(context_ids.context_2d) + ")");
   const int seam_u0_pcurve = step.add("PCURVE(''," + step.ref(cylinder_surface) + "," +
                                       step.ref(seam_u0_repr) + ")");
 
@@ -424,7 +208,7 @@ bool write_step_file_simple_cylinder(const std::filesystem::path& path,
                                     step.ref(seam_v_vec) + ")");
   const int seam_u1_repr =
       step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(seam_u1_line) + ")," +
-               step.ref(context_2d) + ")");
+               step.ref(context_ids.context_2d) + ")");
   const int seam_u1_pcurve = step.add("PCURVE(''," + step.ref(cylinder_surface) + "," +
                                       step.ref(seam_u1_repr) + ")");
   const int seam_curve = step.add("SEAM_CURVE(''," + step.ref(seam_line) + ",(" +
@@ -442,7 +226,7 @@ bool write_step_file_simple_cylinder(const std::filesystem::path& path,
                step.ref(top_cyl_pcurve_vec) + ")");
   const int bottom_cyl_pcurve_repr =
       step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(bottom_cyl_pcurve_line) + ")," +
-               step.ref(context_2d) + ")");
+               step.ref(context_ids.context_2d) + ")");
   const int bottom_cyl_pcurve = step.add("PCURVE(''," + step.ref(cylinder_surface) + "," +
                                          step.ref(bottom_cyl_pcurve_repr) + ")");
   const int bottom_plane_origin_2d = step.add("CARTESIAN_POINT('',(0.0,0.0))");
@@ -454,7 +238,7 @@ bool write_step_file_simple_cylinder(const std::filesystem::path& path,
                                         format_double(cylinder.radius) + ")");
   const int bottom_circle_repr =
       step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(bottom_circle_2d) + ")," +
-               step.ref(context_2d) + ")");
+               step.ref(context_ids.context_2d) + ")");
   const int bottom_plane_pcurve = step.add("PCURVE(''," + step.ref(bottom_plane) + "," +
                                            step.ref(bottom_circle_repr) + ")");
   const int bottom_surface_curve = step.add("SURFACE_CURVE(''," + step.ref(bottom_circle) + ",(" +
@@ -496,12 +280,36 @@ bool write_step_file_simple_cylinder(const std::filesystem::path& path,
 
   const int closed_shell = step.add("CLOSED_SHELL('',(" + step.ref(lateral_face) + "," +
                                    step.ref(top_face) + "," + step.ref(bottom_face) + "))");
-  const int manifold_solid_brep =
-      step.add("MANIFOLD_SOLID_BREP('mesh2solid'," + step.ref(closed_shell) + ")");
+  return step.add("MANIFOLD_SOLID_BREP('mesh2solid'," + step.ref(closed_shell) + ")");
+}
+
+bool write_step_file_simple_cylinders(const std::filesystem::path& path,
+                                      const std::vector<SimpleCylinderPrimitive>& cylinders) {
+  if (cylinders.empty()) {
+    return false;
+  }
+
+  StepBuilder step;
+  const StepExportContext context_ids = build_step_export_context(step);
+  std::vector<int> solid_ids;
+  solid_ids.reserve(cylinders.size());
+  for (const SimpleCylinderPrimitive& cylinder : cylinders) {
+    solid_ids.push_back(add_step_cylinder_solid(step, context_ids, cylinder));
+  }
+
+  std::ostringstream items;
+  for (std::size_t index = 0; index < solid_ids.size(); ++index) {
+    if (index != 0) {
+      items << ",";
+    }
+    items << step.ref(solid_ids[index]);
+  }
+  items << "," << step.ref(context_ids.global_axis);
+
   const int shape_representation =
-      step.add("ADVANCED_BREP_SHAPE_REPRESENTATION('',(" + step.ref(manifold_solid_brep) + "," +
-               step.ref(global_axis) + ")," + step.ref(context) + ")");
-  step.add("SHAPE_DEFINITION_REPRESENTATION(" + step.ref(product_shape) + "," +
+      step.add("ADVANCED_BREP_SHAPE_REPRESENTATION('',(" + items.str() + ")," +
+               step.ref(context_ids.context) + ")");
+  step.add("SHAPE_DEFINITION_REPRESENTATION(" + step.ref(context_ids.product_shape) + "," +
            step.ref(shape_representation) + ")");
 
   std::ofstream output(path);
@@ -515,15 +323,18 @@ bool write_step_file_simple_cylinder(const std::filesystem::path& path,
   return true;
 }
 
-bool write_step_file(const std::filesystem::path& path, const ReconstructionResult& reconstruction) {
+bool write_step_file(const std::filesystem::path& path,
+                     const ReconstructionResult& reconstruction,
+                     const MeshModel& mesh,
+                     const Tolerances& tolerances) {
   if (reconstruction.outcome != ReconstructionOutcome::SolidCreated) {
     return false;
   }
 
-  if (const std::optional<SimpleCylinderExport> cylinder =
-          detect_simple_cylinder_export(reconstruction);
-      cylinder.has_value()) {
-    return write_step_file_simple_cylinder(path, *cylinder);
+  if (const std::optional<std::vector<SimpleCylinderPrimitive>> cylinders =
+          collect_simple_cylinder_primitives(mesh, tolerances);
+      cylinders.has_value()) {
+    return write_step_file_simple_cylinders(path, *cylinders);
   }
 
   StepBuilder step;

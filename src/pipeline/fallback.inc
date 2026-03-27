@@ -128,30 +128,6 @@ ReconstructionResult reconstruct_internal_faceted_mesh_fallback(const MeshModel&
   return result;
 }
 
-#if defined(MESH2SOLID_WITH_OCCT)
-struct OcctFallbackBuild {
-  TopoDS_Shape result_shape;
-  std::size_t faces_added {};
-  std::size_t free_edges {};
-  std::size_t multiple_edges {};
-  bool valid {};
-  std::vector<std::string> notes;
-};
-
-double occt_sewing_tolerance(const MeshModel& mesh, const Tolerances& tolerances) {
-  const double diagonal = mesh.bounds.valid ? length(mesh.bounds.max - mesh.bounds.min) : 0.0;
-  const double scale_floor = diagonal > 1e-6 ? diagonal * 1e-6 : 1e-6;
-  return std::max({scale_floor, tolerances.vertex_weld * 2.0, tolerances.plane_merge_distance});
-}
-
-std::string occt_failure_message(const Standard_Failure& failure) {
-  const char* message = failure.GetMessageString();
-  if (message != nullptr && message[0] != '\0') {
-    return message;
-  }
-  return "Standard_Failure";
-}
-
 std::vector<std::vector<int>> collect_triangle_components(const MeshModel& mesh) {
   std::vector<std::vector<int>> components;
   if (mesh.triangles.empty()) {
@@ -225,6 +201,7 @@ struct CircleFit2D {
 struct SimpleCylinderPrimitive {
   Vec3 base_center {};
   Vec3 axis {};
+  Vec3 ref_direction {};
   double radius {};
   double height {};
 };
@@ -519,7 +496,31 @@ std::optional<SimpleCylinderPrimitive> detect_simple_cylinder_component(
     return std::nullopt;
   }
 
-  return SimpleCylinderPrimitive {base_center, axis, circle_fit->radius, height};
+  return SimpleCylinderPrimitive {base_center, axis, basis.u, circle_fit->radius, height};
+}
+
+#if defined(MESH2SOLID_WITH_OCCT)
+struct OcctFallbackBuild {
+  TopoDS_Shape result_shape;
+  std::size_t faces_added {};
+  std::size_t free_edges {};
+  std::size_t multiple_edges {};
+  bool valid {};
+  std::vector<std::string> notes;
+};
+
+double occt_sewing_tolerance(const MeshModel& mesh, const Tolerances& tolerances) {
+  const double diagonal = mesh.bounds.valid ? length(mesh.bounds.max - mesh.bounds.min) : 0.0;
+  const double scale_floor = diagonal > 1e-6 ? diagonal * 1e-6 : 1e-6;
+  return std::max({scale_floor, tolerances.vertex_weld * 2.0, tolerances.plane_merge_distance});
+}
+
+std::string occt_failure_message(const Standard_Failure& failure) {
+  const char* message = failure.GetMessageString();
+  if (message != nullptr && message[0] != '\0') {
+    return message;
+  }
+  return "Standard_Failure";
 }
 
 TopoDS_Shape make_occt_compound(const std::vector<TopoDS_Shape>& shapes) {
@@ -900,48 +901,6 @@ TopoDS_Shape fix_occt_promoted_solids(const TopoDS_Shape& shape, double sewing_t
   return make_occt_compound(fixed_solids);
 }
 
-TopoDS_Shape build_occt_simple_cylinder_shape(const SimpleCylinderPrimitive& cylinder) {
-  if (cylinder.radius <= 1e-6 || cylinder.height <= 1e-6 ||
-      length_squared(cylinder.axis) <= 1e-12) {
-    return {};
-  }
-
-  const PlaneBasis basis = basis_from_normal(cylinder.axis);
-  gp_Ax2 axis(gp_Pnt(cylinder.base_center.x, cylinder.base_center.y, cylinder.base_center.z),
-              gp_Dir(cylinder.axis.x, cylinder.axis.y, cylinder.axis.z),
-              gp_Dir(basis.u.x, basis.u.y, basis.u.z));
-  BRepPrimAPI_MakeCylinder cylinder_builder(axis, cylinder.radius, cylinder.height);
-  if (!cylinder_builder.IsDone()) {
-    return {};
-  }
-  return cylinder_builder.Shape();
-}
-
-TopoDS_Shape build_occt_simple_primitive_shape(const MeshModel& mesh, const Tolerances& tolerances) {
-  const std::vector<std::vector<int>> components = collect_triangle_components(mesh);
-  if (components.empty()) {
-    return {};
-  }
-
-  std::vector<TopoDS_Shape> shapes;
-  shapes.reserve(components.size());
-  for (const std::vector<int>& component : components) {
-    const MeshModel component_mesh = extract_triangle_component_mesh(mesh, component);
-    const std::optional<SimpleCylinderPrimitive> cylinder =
-        detect_simple_cylinder_component(component_mesh, tolerances);
-    if (!cylinder.has_value()) {
-      return {};
-    }
-    TopoDS_Shape shape = build_occt_simple_cylinder_shape(*cylinder);
-    if (shape.IsNull()) {
-      return {};
-    }
-    shapes.push_back(shape);
-  }
-
-  return make_occt_compound(shapes);
-}
-
 TopoDS_Shape finalize_occt_solid_candidate(const TopoDS_Shape& shape, double sewing_tolerance) {
   if (shape.IsNull()) {
     return {};
@@ -1182,30 +1141,6 @@ ReconstructionResult reconstruct_occt_faceted_mesh_fallback(const MeshModel& mes
   return result;
 }
 
-bool write_step_file_occt_simple_primitives(const std::filesystem::path& path,
-                                            const MeshModel& mesh,
-                                            const Tolerances& tolerances) {
-  const TopoDS_Shape shape = build_occt_simple_primitive_shape(mesh, tolerances);
-  if (shape.IsNull()) {
-    return false;
-  }
-
-  try {
-    STEPControl_Writer writer;
-    writer.SetTolerance(occt_sewing_tolerance(mesh, tolerances));
-    const STEPControl_StepModelType mode =
-        shape.ShapeType() == TopAbs_SOLID ? STEPControl_ManifoldSolidBrep : STEPControl_AsIs;
-    if (writer.Transfer(shape, mode) != IFSelect_RetDone) {
-      return false;
-    }
-
-    const std::string path_string = path.string();
-    return writer.Write(path_string.c_str()) == IFSelect_RetDone;
-  } catch (const Standard_Failure&) {
-    return false;
-  }
-}
-
 bool write_step_file_occt(const std::filesystem::path& path,
                           const MeshModel& mesh,
                           const Tolerances& tolerances) {
@@ -1231,12 +1166,6 @@ bool write_step_file_occt(const std::filesystem::path& path,
   }
 }
 #else
-bool write_step_file_occt_simple_primitives(const std::filesystem::path&,
-                                            const MeshModel&,
-                                            const Tolerances&) {
-  return false;
-}
-
 bool write_step_file_occt(const std::filesystem::path&,
                           const MeshModel&,
                           const Tolerances&) {

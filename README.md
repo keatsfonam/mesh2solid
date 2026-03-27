@@ -20,7 +20,7 @@ to keep expanding mesh inputs without renaming the core tool again later.
 - Optionally regularizes detected planes with CGAL before constraint solving when that backend is available.
 - Builds a constraint graph for coplanar, parallel, and perpendicular plane relations.
 - Reconstructs planar shell faces from snapped boundary loops.
-- Upgrades simple cylindrical solids to true curved STEP surfaces instead of planar side facets.
+- Upgrades simple cylindrical solids and disconnected cylinder assemblies to true curved STEP surfaces instead of planar side facets.
 - Falls back to a faceted mesh B-Rep path when the repaired mesh is closed but the analytic planar path cannot confidently emit a solid.
 - Emits:
   - `cleaned_mesh.stl`
