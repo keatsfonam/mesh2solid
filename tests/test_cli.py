@@ -2499,6 +2499,51 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(step_text.count("ADVANCED_FACE"), 8)
             self.assertEqual(step_text.count("PLANE("), 6)
 
+    def test_off_center_rotated_countersinks_stay_clean(self):
+        angle = math.radians(27.5)
+        rotation = (
+            (math.cos(angle), -math.sin(angle), 0.0),
+            (math.sin(angle), math.cos(angle), 0.0),
+            (0.0, 0.0, 1.0),
+        )
+        cases = [
+            {
+                "name": "offset_countersink",
+                "center": (4.5, -3.0),
+                "rotation": None,
+            },
+            {
+                "name": "rotated_offset_countersink",
+                "center": (4.5, -3.0),
+                "rotation": rotation,
+            },
+        ]
+
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = pathlib.Path(tmp)
+                    mesh_path = tmp_path / f"{case['name']}.stl"
+                    out_dir = tmp_path / "out"
+
+                    vertices, faces = countersink_mesh(center=case["center"])
+                    if case["rotation"] is not None:
+                        vertices = transform_mesh(vertices, rotation=case["rotation"])
+                    write_ascii_stl(mesh_path, vertices, faces)
+                    _, report, _, _ = run_cli(mesh_path, out_dir)
+
+                    self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+                    self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+                    self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+                    step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+                    self.assertEqual(step_text.count("CONICAL_SURFACE"), 1)
+                    self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 1)
+                    self.assertEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 0)
+                    self.assertEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 0)
+                    self.assertEqual(step_text.count("ADVANCED_FACE"), 8)
+                    self.assertEqual(step_text.count("PLANE("), 6)
+
     def test_prismatic_block_with_two_counterbores_exports_clean_cylinders(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)
