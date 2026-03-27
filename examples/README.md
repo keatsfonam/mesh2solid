@@ -57,7 +57,7 @@ beyond the tiny golden fixtures in `tests/fixtures/`.
 - `benchmark/cloudgripper/arm_linear_pinion_gear.stl`
   - source: CloudGripper Robot
   - license: MIT
-  - feature focus: repeated gear-tooth structure around a bore
+  - feature focus: repeated gear-tooth structure around a bore plus smooth extruded profile bands
   - current expected outcome: `solid_created`
 - `benchmark/bcn3d_moveo/t4m1e.stl`
   - source: BCN3D Moveo
