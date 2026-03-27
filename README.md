@@ -149,6 +149,9 @@ The repo includes checked-in planar fixtures, including a through-hole tube, and
 outputs under `tests/golden/`. It also includes a more complex bridge example under
 `examples/complex/bridge.stl` as a smoke regression for localized shell healing.
 
+The test suite also generates a deterministic prismatic voxel corpus at runtime, covering
+stepped blocks, L-brackets, channels, disconnected box assemblies, and cross-shaped solids.
+
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
 with upstream STL and 3MF models. Those smoke tests intentionally keep separate expectation
 profiles for the lightweight host build and the Docker full-stack build, so we can expand

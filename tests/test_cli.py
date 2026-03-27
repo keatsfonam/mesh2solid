@@ -148,6 +148,42 @@ def beveled_cube_mesh(size=10.0, bevel=3.0):
     return vertices, faces
 
 
+def voxel_mesh(cells, cell_size=10.0):
+    occupied = set(cells)
+    vertices = []
+    vertex_ids = {}
+    faces = []
+
+    def vertex_id(point):
+        if point not in vertex_ids:
+            vertex_ids[point] = len(vertices)
+            vertices.append(tuple(coordinate * cell_size for coordinate in point))
+        return vertex_ids[point]
+
+    face_definitions = [
+        ((1, 0, 0), [(1, 0, 0), (1, 1, 0), (1, 1, 1), (1, 0, 1)]),
+        ((-1, 0, 0), [(0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)]),
+        ((0, 1, 0), [(0, 1, 0), (0, 1, 1), (1, 1, 1), (1, 1, 0)]),
+        ((0, -1, 0), [(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)]),
+        ((0, 0, 1), [(0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]),
+        ((0, 0, -1), [(0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0, 0)]),
+    ]
+
+    for cell_x, cell_y, cell_z in occupied:
+        for neighbor_offset, face_corners in face_definitions:
+            offset_x, offset_y, offset_z = neighbor_offset
+            if (cell_x + offset_x, cell_y + offset_y, cell_z + offset_z) in occupied:
+                continue
+            quad = [
+                vertex_id((cell_x + corner_x, cell_y + corner_y, cell_z + corner_z))
+                for corner_x, corner_y, corner_z in face_corners
+            ]
+            faces.append((quad[0], quad[1], quad[2]))
+            faces.append((quad[0], quad[2], quad[3]))
+
+    return vertices, faces
+
+
 def write_ascii_stl(path: pathlib.Path, vertices, faces):
     lines = ["solid fixture"]
     for a, b, c in faces:
@@ -227,6 +263,71 @@ def write_basic_3mf(path: pathlib.Path, vertices, faces, *, unit="millimeter", b
         archive.writestr("[Content_Types].xml", content_types_xml)
         archive.writestr("_rels/.rels", relationships_xml)
         archive.writestr("3D/3dmodel.model", model_xml)
+
+
+PRISMATIC_VOXEL_CASES = {
+    "l_bracket": {
+        "cells": {
+            (0, 0, 0),
+            (1, 0, 0),
+            (0, 1, 0),
+            (0, 0, 1),
+            (1, 0, 1),
+            (0, 1, 1),
+        },
+        "expected_faces": 8,
+    },
+    "stepped_block": {
+        "cells": {
+            (0, 0, 0),
+            (1, 0, 0),
+            (0, 1, 0),
+            (1, 1, 0),
+            (0, 0, 1),
+            (1, 0, 1),
+        },
+        "expected_faces": 8,
+    },
+    "u_channel": {
+        "cells": {
+            (0, 0, 0),
+            (1, 0, 0),
+            (2, 0, 0),
+            (0, 1, 0),
+            (2, 1, 0),
+            (0, 0, 1),
+            (1, 0, 1),
+            (2, 0, 1),
+            (0, 1, 1),
+            (2, 1, 1),
+        },
+        "expected_faces": 10,
+    },
+    "double_box": {
+        "cells": {
+            (0, 0, 0),
+            (1, 0, 0),
+            (4, 0, 0),
+            (5, 0, 0),
+        },
+        "expected_faces": 12,
+    },
+    "cross_block": {
+        "cells": {
+            (1, 0, 0),
+            (0, 1, 0),
+            (1, 1, 0),
+            (2, 1, 0),
+            (1, 2, 0),
+            (1, 0, 1),
+            (0, 1, 1),
+            (1, 1, 1),
+            (2, 1, 1),
+            (1, 2, 1),
+        },
+        "expected_faces": 14,
+    },
+}
 
 
 def run_cli(input_mesh: pathlib.Path, out_dir: pathlib.Path, solid_threshold: float = 0.60):
@@ -627,6 +728,30 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertGreaterEqual(step_text.count("CYLINDRICAL_SURFACE"), 2)
             self.assertGreaterEqual(step_text.count("CIRCLE("), 4)
             self.assertLess(step_text.count("ADVANCED_FACE"), report["reconstruction"]["face_count"])
+
+    def test_generated_prismatic_voxel_cases_stay_clean(self):
+        for case_name, case in PRISMATIC_VOXEL_CASES.items():
+            with self.subTest(case=case_name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = pathlib.Path(tmp)
+                    mesh_path = tmp_path / f"{case_name}.stl"
+                    out_dir = tmp_path / "out"
+
+                    vertices, faces = voxel_mesh(case["cells"])
+                    write_ascii_stl(mesh_path, vertices, faces)
+                    _, report, _, _ = run_cli(mesh_path, out_dir)
+
+                    self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+                    self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+                    self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+                    step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+                    self.assertNotIn("FACETED_BREP", step_text)
+                    self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 0)
+                    self.assertEqual(
+                        step_text.count("ADVANCED_FACE"), case["expected_faces"]
+                    )
+                    self.assertEqual(step_text.count("PLANE("), case["expected_faces"])
 
 
 if __name__ == "__main__":
