@@ -13086,11 +13086,11 @@ struct AxialThroughFeatureBundle {
   std::vector<int> shell_faces;
 };
 
-class AxialThroughStepWriter {
+class StepLineLoopWriter {
  public:
-  AxialThroughStepWriter(StepBuilder& builder,
-                         const StepExportContext& export_context,
-                         const ReconstructionResult& mesh)
+  StepLineLoopWriter(StepBuilder& builder,
+                     const StepExportContext& export_context,
+                     const ReconstructionResult& mesh)
       : step(builder),
         context_ids(export_context),
         reconstruction(mesh),
@@ -13151,6 +13151,8 @@ class AxialThroughStepWriter {
     return step.add("PCURVE(''," + step.ref(plane.plane_id) + "," + step.ref(circle_repr) + ")");
   }
 
+  int line_edge_curve_id(int from, int to) { return get_line_edge_curve_id(from, to); }
+
   StepBuilder& step;
   const StepExportContext& context_ids;
   const ReconstructionResult& reconstruction;
@@ -13192,7 +13194,7 @@ class AxialThroughStepWriter {
 };
 
 AxialThroughFeatureBundle add_axial_countersink_feature_bundle(
-    AxialThroughStepWriter& writer,
+    StepLineLoopWriter& writer,
     const StepPlaneSurface& top_plane,
     const StepPlaneSurface& bottom_plane,
     const SimplePrismaticAxialThroughFeature& feature) {
@@ -13439,7 +13441,7 @@ AxialThroughFeatureBundle add_axial_countersink_feature_bundle(
 }
 
 AxialThroughFeatureBundle add_axial_through_feature_bundle(
-    AxialThroughStepWriter& writer,
+    StepLineLoopWriter& writer,
     const StepPlaneSurface& top_plane,
     const StepPlaneSurface& bottom_plane,
     const Vec3& axis,
@@ -13502,7 +13504,7 @@ bool write_step_file_prismatic_axial_through_features(
     const SimplePrismaticAxialThroughFeatureExport& feature_export) {
   StepBuilder step;
   const StepExportContext context_ids = build_step_export_context(step);
-  AxialThroughStepWriter writer(step, context_ids, reconstruction);
+  StepLineLoopWriter writer(step, context_ids, reconstruction);
 
   std::vector<int> top_outer_loop = feature_export.top_outer_loop;
   std::vector<int> bottom_outer_loop = feature_export.bottom_outer_loop;
@@ -13663,68 +13665,7 @@ bool write_step_file_generic_cylindrical_features(
     const GenericCylindricalFeatureExport& feature_export) {
   StepBuilder step;
   const StepExportContext context_ids = build_step_export_context(step);
-
-  std::vector<int> point_ids(reconstruction.vertices.size(), 0);
-  for (std::size_t index = 0; index < reconstruction.vertices.size(); ++index) {
-    const Vec3& vertex = reconstruction.vertices[index];
-    point_ids[index] = step.add("CARTESIAN_POINT('',(" + format_double(vertex.x) + "," +
-                                   format_double(vertex.y) + "," + format_double(vertex.z) + "))");
-  }
-
-  std::vector<int> vertex_point_ids(reconstruction.vertices.size(), 0);
-  for (std::size_t index = 0; index < reconstruction.vertices.size(); ++index) {
-    vertex_point_ids[index] = step.add("VERTEX_POINT(''," + step.ref(point_ids[index]) + ")");
-  }
-
-  std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_curve_ids;
-  auto get_line_edge_curve_id = [&](int from, int to) -> int {
-    const EdgeKey key = make_edge_key(from, to);
-    const auto found = edge_curve_ids.find(key);
-    if (found != edge_curve_ids.end()) {
-      return found->second;
-    }
-
-    const Vec3 start = reconstruction.vertices[key.a];
-    const Vec3 end = reconstruction.vertices[key.b];
-    const Vec3 delta = end - start;
-    const double edge_length = length(delta);
-    if (edge_length <= 1e-12) {
-      throw std::runtime_error("Cannot export zero-length STEP edge");
-    }
-
-    const Vec3 direction = normalized(delta);
-    const int direction_id =
-        step.add("DIRECTION('',(" + format_double(direction.x) + "," + format_double(direction.y) +
-                 "," + format_double(direction.z) + "))");
-    const int vector_id = step.add("VECTOR(''," + step.ref(direction_id) + "," +
-                                   format_double(edge_length) + ")");
-    const int line_id = step.add("LINE(''," + step.ref(point_ids[key.a]) + "," +
-                                 step.ref(vector_id) + ")");
-    const int edge_curve_id =
-        step.add("EDGE_CURVE(''," + step.ref(vertex_point_ids[key.a]) + "," +
-                 step.ref(vertex_point_ids[key.b]) + "," + step.ref(line_id) + ",.T.)");
-    edge_curve_ids.emplace(key, edge_curve_id);
-    return edge_curve_id;
-  };
-
-  auto add_line_loop = [&](const std::vector<int>& loop) -> int {
-    std::ostringstream edge_refs;
-    for (std::size_t index = 0; index < loop.size(); ++index) {
-      const int from = loop[index];
-      const int to = loop[(index + 1) % loop.size()];
-      const int edge_curve_id = get_line_edge_curve_id(from, to);
-      const EdgeKey key = make_edge_key(from, to);
-      const bool same_orientation = key.a == from && key.b == to;
-      const int oriented_edge_id =
-          step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
-                   std::string(same_orientation ? ".T." : ".F.") + ")");
-      if (index > 0) {
-        edge_refs << ",";
-      }
-      edge_refs << step.ref(oriented_edge_id);
-    }
-    return step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
-  };
+  StepLineLoopWriter writer(step, context_ids, reconstruction);
 
   struct LoopCurveReplacement {
     LoopSubsequenceMatch match;
@@ -13734,7 +13675,7 @@ bool write_step_file_generic_cylindrical_features(
   auto add_loop_with_replacements = [&](const std::vector<int>& loop,
                                         const std::vector<LoopCurveReplacement>& replacements) -> int {
     if (loop.size() < 2 || replacements.empty()) {
-      return add_line_loop(loop);
+      return writer.add_line_loop(loop);
     }
 
     std::unordered_map<std::size_t, std::size_t> replacement_by_start;
@@ -13742,15 +13683,15 @@ bool write_step_file_generic_cylindrical_features(
     for (std::size_t replacement_index = 0; replacement_index < replacements.size(); ++replacement_index) {
       const LoopCurveReplacement& replacement = replacements[replacement_index];
       if (replacement.match.span == 0 || replacement.match.span >= loop.size()) {
-        return add_line_loop(loop);
+        return writer.add_line_loop(loop);
       }
       if (!replacement_by_start.emplace(replacement.match.start, replacement_index).second) {
-        return add_line_loop(loop);
+        return writer.add_line_loop(loop);
       }
       for (std::size_t offset = 0; offset < replacement.match.span; ++offset) {
         const std::size_t edge_slot = (replacement.match.start + offset) % loop.size();
         if (covered[edge_slot]) {
-          return add_line_loop(loop);
+          return writer.add_line_loop(loop);
         }
         covered[edge_slot] = true;
       }
@@ -13794,7 +13735,7 @@ bool write_step_file_generic_cylindrical_features(
 
       const int from = loop[edge_index];
       const int to = loop[(edge_index + 1) % loop.size()];
-      const int line_edge_curve_id = get_line_edge_curve_id(from, to);
+      const int line_edge_curve_id = writer.line_edge_curve_id(from, to);
       const EdgeKey key = make_edge_key(from, to);
       append_oriented_edge(line_edge_curve_id, key.a == from && key.b == to);
       edge_index = (edge_index + 1) % loop.size();
@@ -13939,7 +13880,7 @@ bool write_step_file_generic_cylindrical_features(
       std::vector<int> bound_ids;
       bound_ids.reserve(face.loops.size());
       for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
-        const int edge_loop = add_line_loop(face.loops[loop_index]);
+        const int edge_loop = writer.add_line_loop(face.loops[loop_index]);
         if (loop_index == 0) {
           bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
         } else {
@@ -14030,7 +13971,7 @@ bool write_step_file_generic_cylindrical_features(
         continue;
       }
 
-      const int edge_loop = add_line_loop(face.loops[loop_index]);
+      const int edge_loop = writer.add_line_loop(face.loops[loop_index]);
       if (loop_index == *outer_loop_index) {
         bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
       } else {
