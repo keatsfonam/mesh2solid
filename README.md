@@ -150,8 +150,9 @@ outputs under `tests/golden/`. It also includes a more complex bridge example un
 `examples/complex/bridge.stl` as a smoke regression for localized shell healing.
 
 The test suite also generates a deterministic prismatic corpus at runtime, covering stepped
-blocks, L-brackets, channels, disconnected box assemblies, cross-shaped solids, and multi-item
-3MF box assemblies.
+blocks, L-brackets, channels, disconnected box assemblies, cross-shaped solids, multi-item
+3MF box assemblies, and prismatic blocks with analytic cylindrical through-bores, including
+rotated off-axis cases.
 
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
 with upstream STL and 3MF models. Those smoke tests intentionally keep separate expectation

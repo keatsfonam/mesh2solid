@@ -4,6 +4,14 @@ project(mesh2solid LANGUAGES CXX)
 option(MESH2SOLID_ENABLE_CGAL "Enable CGAL when available" ON)
 option(MESH2SOLID_ENABLE_OPENCASCADE "Enable Open CASCADE when available" ON)
 
+# Keep the CMake build profile aligned with the Makefile's O2 setting.
+# This avoids OOM kills in the Docker full-stack CGAL/OCCT build that can occur at O3.
+foreach(config RELEASE RELWITHDEBINFO)
+  if(DEFINED CMAKE_CXX_FLAGS_${config})
+    string(REPLACE "-O3" "-O2" CMAKE_CXX_FLAGS_${config} "${CMAKE_CXX_FLAGS_${config}}")
+  endif()
+endforeach()
+
 find_package(ZLIB REQUIRED)
 
 set(MESH2SOLID_PIPELINE_IMPL

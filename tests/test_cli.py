@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import pathlib
 import subprocess
@@ -182,6 +183,80 @@ def voxel_mesh(cells, cell_size=10.0):
             faces.append((quad[0], quad[2], quad[3]))
 
     return vertices, faces
+
+
+def box_with_round_bore_mesh(half_size=20.0, radius=8.0, height=20.0, segments=16):
+    vertices = []
+    vertex_ids = {}
+    faces = []
+
+    def vertex_id(point):
+        key = tuple(round(value, 8) for value in point)
+        if key not in vertex_ids:
+            vertex_ids[key] = len(vertices)
+            vertices.append(tuple(float(value) for value in point))
+        return vertex_ids[key]
+
+    def square_support(angle):
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
+        scale = max(abs(cosine), abs(sine))
+        return half_size * cosine / scale, half_size * sine / scale
+
+    outer_bottom = []
+    outer_top = []
+    inner_bottom = []
+    inner_top = []
+    for index in range(segments):
+        angle = 2.0 * math.pi * index / segments
+        outer_x, outer_y = square_support(angle)
+        inner_x = radius * math.cos(angle)
+        inner_y = radius * math.sin(angle)
+        outer_bottom.append(vertex_id((outer_x, outer_y, 0.0)))
+        outer_top.append(vertex_id((outer_x, outer_y, height)))
+        inner_bottom.append(vertex_id((inner_x, inner_y, 0.0)))
+        inner_top.append(vertex_id((inner_x, inner_y, height)))
+
+    for index in range(segments):
+        next_index = (index + 1) % segments
+
+        faces.append((outer_top[index], outer_top[next_index], inner_top[next_index]))
+        faces.append((outer_top[index], inner_top[next_index], inner_top[index]))
+
+        faces.append((outer_bottom[index], inner_bottom[next_index], outer_bottom[next_index]))
+        faces.append((outer_bottom[index], inner_bottom[index], inner_bottom[next_index]))
+
+        faces.append((outer_bottom[index], outer_bottom[next_index], outer_top[next_index]))
+        faces.append((outer_bottom[index], outer_top[next_index], outer_top[index]))
+
+        faces.append((inner_bottom[index], inner_top[next_index], inner_bottom[next_index]))
+        faces.append((inner_bottom[index], inner_top[index], inner_top[next_index]))
+
+    return vertices, faces
+
+
+def transform_mesh(vertices, *, rotation=None, translation=(0.0, 0.0, 0.0)):
+    if rotation is None:
+        rotation = (
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0),
+        )
+
+    transformed = []
+    translate_x, translate_y, translate_z = translation
+    for x, y, z in vertices:
+        transformed_x = (
+            rotation[0][0] * x + rotation[0][1] * y + rotation[0][2] * z + translate_x
+        )
+        transformed_y = (
+            rotation[1][0] * x + rotation[1][1] * y + rotation[1][2] * z + translate_y
+        )
+        transformed_z = (
+            rotation[2][0] * x + rotation[2][1] * y + rotation[2][2] * z + translate_z
+        )
+        transformed.append((transformed_x, transformed_y, transformed_z))
+    return transformed
 
 
 def write_ascii_stl(path: pathlib.Path, vertices, faces):
@@ -794,6 +869,64 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertGreaterEqual(step_text.count("CYLINDRICAL_SURFACE"), 2)
             self.assertGreaterEqual(step_text.count("CIRCLE("), 4)
             self.assertLess(step_text.count("ADVANCED_FACE"), report["reconstruction"]["face_count"])
+
+    def test_prismatic_block_with_round_bore_exports_clean_cylinder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "box_with_bore.stl"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = box_with_round_bore_mesh()
+            write_ascii_stl(mesh_path, vertices, faces)
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertNotIn("FACETED_BREP", step_text)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 1)
+            self.assertGreaterEqual(step_text.count("CIRCLE("), 4)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 7)
+            self.assertEqual(step_text.count("PLANE("), 6)
+            self.assertGreaterEqual(step_text.count("FACE_BOUND"), 3)
+
+    def test_rotated_prismatic_block_with_round_bore_stays_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "rotated_box_with_bore.stl"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = box_with_round_bore_mesh()
+            angle_x = math.radians(19.0)
+            angle_y = math.radians(-27.0)
+            cos_x = math.cos(angle_x)
+            sin_x = math.sin(angle_x)
+            cos_y = math.cos(angle_y)
+            sin_y = math.sin(angle_y)
+            rotation = (
+                (cos_y, sin_x * sin_y, cos_x * sin_y),
+                (0.0, cos_x, -sin_x),
+                (-sin_y, sin_x * cos_y, cos_x * cos_y),
+            )
+            transformed_vertices = transform_mesh(
+                vertices, rotation=rotation, translation=(13.5, -22.0, 8.0)
+            )
+            write_ascii_stl(mesh_path, transformed_vertices, faces)
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertNotIn("FACETED_BREP", step_text)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 1)
+            self.assertGreaterEqual(step_text.count("CIRCLE("), 4)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 7)
+            self.assertEqual(step_text.count("PLANE("), 6)
+            self.assertGreaterEqual(step_text.count("FACE_BOUND"), 3)
 
     def test_generated_prismatic_voxel_cases_stay_clean(self):
         for case_name, case in PRISMATIC_VOXEL_CASES.items():
