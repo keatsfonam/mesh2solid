@@ -155,8 +155,8 @@ blocks, L-brackets, channels, disconnected box assemblies, cross-shaped solids, 
 rotated off-axis, off-center, repeated multi-bore mounting patterns, repeated multi-counterbore mounting patterns, and varied aspect-ratio cases, plus blind cylindrical pockets,
 blind counterbores, simple counterbores, cylindrical bosses/posts, repeated multi-boss pads,
 and standoff-style tubular
-bosses with concentric through-holes, plus repeated multi-blind-bore pocket patterns and obround through-slots
-with analytic half-cylinders.
+bosses with concentric through-holes, plus repeated multi-blind-bore and repeated multi-blind-counterbore
+pocket patterns, and obround through-slots with analytic half-cylinders.
 
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
 with upstream STL and 3MF models. Those smoke tests intentionally keep separate expectation
