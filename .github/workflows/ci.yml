@@ -32,7 +32,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/workspace" \
             -w /workspace \
             mesh2solid-ci \
-            bash -lc "cmake -S . -B build-cmake/docker-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DMESH2SOLID_ENABLE_CGAL=ON -DMESH2SOLID_ENABLE_OPENCASCADE=ON && cmake --build build-cmake/docker-full && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 -m unittest discover -s tests -p 'test_*.py'"
+            bash -lc "cmake -S . -B build-cmake/docker-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DMESH2SOLID_ENABLE_CGAL=ON -DMESH2SOLID_ENABLE_OPENCASCADE=ON && cmake --build build-cmake/docker-full --parallel 1 && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 -m unittest discover -s tests -p 'test_*.py'"
 
       - name: Run Docker full-stack benchmarks
         run: |
@@ -42,10 +42,10 @@ jobs:
             -v "$GITHUB_WORKSPACE:/workspace" \
             -w /workspace \
             mesh2solid-ci \
-            bash -lc "cmake -S . -B build-cmake/docker-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DMESH2SOLID_ENABLE_CGAL=ON -DMESH2SOLID_ENABLE_OPENCASCADE=ON && cmake --build build-cmake/docker-full && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 benchmarks/run_examples.py --expectation-profile docker-full"
+            bash -lc "cmake -S . -B build-cmake/docker-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DMESH2SOLID_ENABLE_CGAL=ON -DMESH2SOLID_ENABLE_OPENCASCADE=ON && cmake --build build-cmake/docker-full --parallel 1 && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 benchmarks/run_examples.py --expectation-profile docker-full"
 
-  host-build-and-test:
-    name: Host Build and Test (${{ matrix.os }})
+  host-smoke:
+    name: Host Smoke Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -83,6 +83,3 @@ jobs:
 
       - name: Run test suite
         run: python3 -m unittest discover -s tests -p 'test_*.py'
-
-      - name: Run host benchmark corpus
-        run: python3 benchmarks/run_examples.py --expectation-profile host-minimal

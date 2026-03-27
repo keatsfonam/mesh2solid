@@ -68,3 +68,11 @@ if(MESH2SOLID_ENABLE_OPENCASCADE)
     target_link_libraries(mesh2solid PRIVATE ${MESH2SOLID_OCCT_LIBRARIES})
   endif()
 endif()
+
+if(CGAL_FOUND OR OpenCASCADE_FOUND)
+  # pipeline.cpp is a very large translation unit today; compiling it with the
+  # full geometry stack at release optimizations can exceed memory limits in
+  # container builds. Prefer a reproducible full-stack binary over a faster
+  # compile that is OOM-killed.
+  set_source_files_properties(src/pipeline.cpp PROPERTIES COMPILE_OPTIONS "-O0;-g0")
+endif()

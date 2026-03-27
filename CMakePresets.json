@@ -8,7 +8,7 @@
   "configurePresets": [
     {
       "name": "host-minimal",
-      "displayName": "Host Minimal",
+      "displayName": "Host Smoke",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-cmake/host-minimal",
       "cacheVariables": {
@@ -24,6 +24,8 @@
       "binaryDir": "${sourceDir}/build-cmake/docker-full",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
         "MESH2SOLID_ENABLE_CGAL": "ON",
         "MESH2SOLID_ENABLE_OPENCASCADE": "ON"
       }

@@ -17,18 +17,17 @@ Run the checked-in public benchmark corpus with:
 make hard-bench
 ```
 
-That uses the `host-minimal` expectation profile, which keeps the lightweight fallback baseline.
+That uses the supported `docker-full` expectation profile, which requires every checked-in
+benchmark, including `cube_gears.3mf`, to reach a clean `solid_created` result with no
+reported `failure_reasons`.
 
-Or run the same set against the Docker full-stack build with:
+`make docker-hard-bench` remains as an alias for the same command.
+
+For the lightweight internal smoke benchmark pass instead:
 
 ```bash
-make docker-hard-bench
+make smoke-bench
 ```
 
-That uses the `docker-full` expectation profile, which requires every checked-in benchmark,
-including `cube_gears.3mf`, to reach a clean `solid_created` result with no reported
-`failure_reasons`.
-
-The benchmark runner treats harder cases as minimum-outcome checks per profile. The host-minimal
-profile still allows `cube_gears.3mf` to stay at `shell_only`, while the already working
-mechanical parts and `heartgears.3mf` are required to reach `solid_created`.
+That uses the lightweight `host-minimal` expectation profile. It is kept only for fast local
+smoke checks while iterating and still allows `cube_gears.3mf` to stay at `shell_only`.
