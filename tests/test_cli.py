@@ -2211,7 +2211,9 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
             self.assertGreaterEqual(step_text.count("CYLINDRICAL_SURFACE"), 9)
             self.assertGreaterEqual(step_text.count("CIRCLE("), 20)
-            self.assertLessEqual(step_text.count("ADVANCED_FACE"), 100)
+            self.assertGreaterEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 2)
+            self.assertGreaterEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 1)
+            self.assertLessEqual(step_text.count("ADVANCED_FACE"), 92)
             self.assertLess(step_text.count("ADVANCED_FACE"), report["reconstruction"]["face_count"])
 
     def test_arm_linear_pinion_gear_benchmark_upgrades_faceted_profile_bands(self):
@@ -2262,6 +2264,9 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
             self.assertGreaterEqual(step_text.count("CYLINDRICAL_SURFACE"), 3)
             self.assertGreaterEqual(step_text.count("CIRCLE("), 8)
+            self.assertGreaterEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 2)
+            self.assertGreaterEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 1)
+            self.assertLessEqual(step_text.count("ADVANCED_FACE"), 655)
             self.assertLess(step_text.count("ADVANCED_FACE"), report["reconstruction"]["face_count"])
 
     def test_prismatic_block_with_round_bore_exports_clean_cylinder(self):

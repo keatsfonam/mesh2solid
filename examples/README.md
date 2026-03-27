@@ -47,7 +47,7 @@ beyond the tiny golden fixtures in `tests/fixtures/`.
 - `benchmark/cloudgripper/arm_holder.stl`
   - source: CloudGripper Robot
   - license: MIT
-  - feature focus: asymmetric holder geometry
+  - feature focus: asymmetric holder geometry with mixed cylindrical and smooth cap-pair profile bands
   - current expected outcome: `solid_created`
 - `benchmark/cloudgripper/xy_nema_bracket.stl`
   - source: CloudGripper Robot
@@ -62,7 +62,7 @@ beyond the tiny golden fixtures in `tests/fixtures/`.
 - `benchmark/bcn3d_moveo/t4m1e.stl`
   - source: BCN3D Moveo
   - license: MIT
-  - feature focus: more complex robotic-arm articulation geometry
+  - feature focus: more complex robotic-arm articulation geometry with mixed cylindrical bores and smooth cap-pair profile bands
   - current expected outcome: `solid_created`
 - `benchmark/fdm_screws/fdm_nut_and_bolt.stl`
   - source: mechadense `scad-lib-FDMscrews`

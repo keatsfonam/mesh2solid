@@ -644,6 +644,49 @@ std::vector<Vec2> smooth_profile_points(const std::vector<Vec2>& points) {
   return smoothed;
 }
 
+std::vector<Vec2> resample_polyline_2d(const std::vector<Vec2>& points, std::size_t target_count) {
+  if (points.size() < 2 || target_count <= 2) {
+    return points;
+  }
+
+  std::vector<double> cumulative(points.size(), 0.0);
+  for (std::size_t index = 1; index < points.size(); ++index) {
+    const double dx = points[index].x - points[index - 1].x;
+    const double dy = points[index].y - points[index - 1].y;
+    cumulative[index] = cumulative[index - 1] + std::sqrt(dx * dx + dy * dy);
+  }
+  const double total_length = cumulative.back();
+  if (total_length <= 1e-9) {
+    return points;
+  }
+
+  std::vector<Vec2> resampled;
+  resampled.reserve(target_count);
+  for (std::size_t sample_index = 0; sample_index < target_count; ++sample_index) {
+    const double target_length =
+        total_length * static_cast<double>(sample_index) / static_cast<double>(target_count - 1);
+    auto upper = std::lower_bound(cumulative.begin(), cumulative.end(), target_length);
+    if (upper == cumulative.begin()) {
+      resampled.push_back(points.front());
+      continue;
+    }
+    if (upper == cumulative.end()) {
+      resampled.push_back(points.back());
+      continue;
+    }
+
+    const std::size_t upper_index = static_cast<std::size_t>(upper - cumulative.begin());
+    const std::size_t lower_index = upper_index - 1;
+    const double span = cumulative[upper_index] - cumulative[lower_index];
+    const double t = span <= 1e-12 ? 0.0 : (target_length - cumulative[lower_index]) / span;
+    resampled.push_back(Vec2 {
+        points[lower_index].x * (1.0 - t) + points[upper_index].x * t,
+        points[lower_index].y * (1.0 - t) + points[upper_index].y * t,
+    });
+  }
+  return resampled;
+}
+
 std::optional<std::size_t> outer_loop_index_from_areas(const std::vector<double>& areas);
 
 struct CylinderShellFaceMatch {
@@ -4664,23 +4707,29 @@ std::optional<GenericSmoothExtrudedBandExport> detect_generic_smooth_extruded_ba
           filter_edges_for_loop(top_edges, top_loop_ref->first, top_loop_ref->second));
       std::vector<int> bottom_chain = ordered_open_chain_from_directed_edges(
           filter_edges_for_loop(bottom_edges, bottom_loop_ref->first, bottom_loop_ref->second));
-      if (top_chain.size() < 8 || bottom_chain.size() != top_chain.size()) {
+      if (top_chain.size() < 6 || bottom_chain.size() < 6) {
         continue;
       }
 
       std::vector<Vec2> top_profile = project_chain_to_basis(top_chain, reconstruction.vertices, axis_basis);
       std::vector<Vec2> bottom_profile =
           project_chain_to_basis(bottom_chain, reconstruction.vertices, axis_basis);
-      std::vector<Vec2> reversed_bottom = bottom_profile;
+      const std::size_t sample_count =
+          std::max<std::size_t>(8, std::min<std::size_t>(18, std::max(top_profile.size(), bottom_profile.size())));
+      const std::vector<Vec2> sampled_top = resample_polyline_2d(top_profile, sample_count);
+      const std::vector<Vec2> sampled_bottom = resample_polyline_2d(bottom_profile, sample_count);
+      std::vector<Vec2> reversed_bottom = sampled_bottom;
       std::reverse(reversed_bottom.begin(), reversed_bottom.end());
-      if (rms_profile_delta(top_profile, reversed_bottom) < rms_profile_delta(top_profile, bottom_profile)) {
+      if (rms_profile_delta(sampled_top, reversed_bottom) < rms_profile_delta(sampled_top, sampled_bottom)) {
         std::reverse(bottom_chain.begin(), bottom_chain.end());
-        bottom_profile = std::move(reversed_bottom);
+        bottom_profile = project_chain_to_basis(bottom_chain, reconstruction.vertices, axis_basis);
       }
 
-      const double profile_delta = rms_profile_delta(top_profile, bottom_profile);
+      const std::vector<Vec2> normalized_top = resample_polyline_2d(top_profile, sample_count);
+      const std::vector<Vec2> normalized_bottom = resample_polyline_2d(bottom_profile, sample_count);
+      const double profile_delta = rms_profile_delta(normalized_top, normalized_bottom);
       const double profile_length =
-          std::max(polyline_length_2d(top_profile), polyline_length_2d(bottom_profile));
+          std::max(polyline_length_2d(normalized_top), polyline_length_2d(normalized_bottom));
       if (!std::isfinite(profile_delta) ||
           profile_delta > std::max(profile_length * 0.04, 0.18)) {
         continue;
@@ -4709,12 +4758,184 @@ std::optional<GenericSmoothExtrudedBandExport> detect_generic_smooth_extruded_ba
       band.basis = axis_basis;
       band.top_plane = static_cast<double>(top_plane_key) / 1000.0;
       band.bottom_plane = static_cast<double>(bottom_plane_key) / 1000.0;
-      band.top_profile_points = smooth_profile_points(top_profile);
-      band.bottom_profile_points = smooth_profile_points(bottom_profile);
+      band.top_profile_points = smooth_profile_points(normalized_top);
+      band.bottom_profile_points = smooth_profile_points(normalized_bottom);
       band.side_face_indices = component;
       std::sort(band.side_face_indices.begin(), band.side_face_indices.end());
       candidates.push_back(std::move(band));
     }
+  }
+
+  std::vector<int> global_side_faces;
+  global_side_faces.reserve(reconstruction.faces.size());
+  for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
+    const ReconstructedFace& face = reconstruction.faces[face_index];
+    if (face.loops.size() == 1 && std::abs(face.fit.normal.z) < 0.7) {
+      global_side_faces.push_back(static_cast<int>(face_index));
+    }
+  }
+
+  const std::unordered_set<int> global_side_set(global_side_faces.begin(), global_side_faces.end());
+  std::unordered_map<int, std::vector<int>> global_adjacency;
+  for (int face_index : global_side_faces) {
+    const std::vector<int>& loop = reconstruction.faces[face_index].loops.front();
+    for (std::size_t edge_index = 0; edge_index < loop.size(); ++edge_index) {
+      const EdgeKey key = make_edge_key(loop[edge_index], loop[(edge_index + 1) % loop.size()]);
+      const auto found = edge_faces.find(key);
+      if (found == edge_faces.end()) {
+        continue;
+      }
+      for (const EdgeRef& ref : found->second) {
+        if (ref.face_index != face_index && global_side_set.contains(ref.face_index)) {
+          global_adjacency[face_index].push_back(ref.face_index);
+        }
+      }
+    }
+  }
+
+  std::unordered_set<int> visited_global_faces;
+  for (int seed_face : global_side_faces) {
+    if (visited_global_faces.contains(seed_face)) {
+      continue;
+    }
+
+    std::vector<int> component;
+    std::vector<int> stack {seed_face};
+    visited_global_faces.insert(seed_face);
+    while (!stack.empty()) {
+      const int face_index = stack.back();
+      stack.pop_back();
+      component.push_back(face_index);
+      for (int neighbor : global_adjacency[face_index]) {
+        if (!visited_global_faces.contains(neighbor)) {
+          visited_global_faces.insert(neighbor);
+          stack.push_back(neighbor);
+        }
+      }
+    }
+    if (component.size() < 8 || component.size() > 96) {
+      continue;
+    }
+
+    const std::unordered_set<int> component_set(component.begin(), component.end());
+    std::unordered_map<std::uint64_t, int> loop_counts;
+    std::unordered_map<std::uint64_t, std::pair<int, std::size_t>> loop_lookup;
+    std::unordered_map<std::uint64_t, std::vector<std::pair<int, int>>> boundary_edges_by_loop;
+
+    for (int face_index : component) {
+      const std::vector<int>& loop = reconstruction.faces[face_index].loops.front();
+      for (std::size_t edge_index = 0; edge_index < loop.size(); ++edge_index) {
+        const int from = loop[edge_index];
+        const int to = loop[(edge_index + 1) % loop.size()];
+        const auto found = edge_faces.find(make_edge_key(from, to));
+        if (found == edge_faces.end()) {
+          continue;
+        }
+        for (const EdgeRef& ref : found->second) {
+          if (component_set.contains(ref.face_index)) {
+            continue;
+          }
+          const std::uint64_t loop_key = make_face_loop_key(ref.face_index, ref.loop_index);
+          loop_counts[loop_key] += 1;
+          loop_lookup.emplace(loop_key, std::pair<int, std::size_t> {ref.face_index, ref.loop_index});
+          boundary_edges_by_loop[loop_key].push_back({from, to});
+        }
+      }
+    }
+
+    if (loop_counts.size() < 2) {
+      continue;
+    }
+
+    std::vector<std::pair<std::uint64_t, int>> ranked_loops(loop_counts.begin(), loop_counts.end());
+    std::sort(ranked_loops.begin(),
+              ranked_loops.end(),
+              [](const auto& lhs, const auto& rhs) {
+                if (lhs.second != rhs.second) {
+                  return lhs.second > rhs.second;
+                }
+                return lhs.first < rhs.first;
+              });
+    if (ranked_loops[0].second < 6 || ranked_loops[1].second < 6) {
+      continue;
+    }
+
+    const auto top_loop_ref = loop_lookup[ranked_loops[0].first];
+    const auto bottom_loop_ref = loop_lookup[ranked_loops[1].first];
+    const ReconstructedFace& top_face = reconstruction.faces[top_loop_ref.first];
+    const ReconstructedFace& bottom_face = reconstruction.faces[bottom_loop_ref.first];
+    if (angle_degrees_unsigned(top_face.fit.normal, bottom_face.fit.normal) > 8.0) {
+      continue;
+    }
+
+    Vec3 axis = normalized(top_face.fit.normal);
+    if (length_squared(axis) <= 1e-12) {
+      continue;
+    }
+    if (dot(top_face.fit.centroid - bottom_face.fit.centroid, axis) < 0.0) {
+      axis = axis * -1.0;
+    }
+    const PlaneBasis axis_basis = basis_from_normal(axis);
+
+    const auto top_edges = boundary_edges_by_loop[ranked_loops[0].first];
+    const auto bottom_edges = boundary_edges_by_loop[ranked_loops[1].first];
+    std::vector<int> top_chain = ordered_open_chain_from_directed_edges(top_edges);
+    std::vector<int> bottom_chain = ordered_open_chain_from_directed_edges(bottom_edges);
+    if (top_chain.size() < 6 || bottom_chain.size() < 6) {
+      continue;
+    }
+
+    std::vector<Vec2> top_profile = project_chain_to_basis(top_chain, reconstruction.vertices, axis_basis);
+    std::vector<Vec2> bottom_profile = project_chain_to_basis(bottom_chain, reconstruction.vertices, axis_basis);
+    const std::size_t sample_count =
+        std::max<std::size_t>(8, std::min<std::size_t>(18, std::max(top_profile.size(), bottom_profile.size())));
+    const std::vector<Vec2> sampled_top = resample_polyline_2d(top_profile, sample_count);
+    const std::vector<Vec2> sampled_bottom = resample_polyline_2d(bottom_profile, sample_count);
+    std::vector<Vec2> reversed_bottom = sampled_bottom;
+    std::reverse(reversed_bottom.begin(), reversed_bottom.end());
+    if (rms_profile_delta(sampled_top, reversed_bottom) < rms_profile_delta(sampled_top, sampled_bottom)) {
+      std::reverse(bottom_chain.begin(), bottom_chain.end());
+      bottom_profile = project_chain_to_basis(bottom_chain, reconstruction.vertices, axis_basis);
+    }
+
+    const std::vector<Vec2> normalized_top = resample_polyline_2d(top_profile, sample_count);
+    const std::vector<Vec2> normalized_bottom = resample_polyline_2d(bottom_profile, sample_count);
+    const double profile_delta = rms_profile_delta(normalized_top, normalized_bottom);
+    const double profile_length =
+        std::max(polyline_length_2d(normalized_top), polyline_length_2d(normalized_bottom));
+    if (!std::isfinite(profile_delta) ||
+        profile_delta > std::max(profile_length * 0.04, 0.18)) {
+      continue;
+    }
+
+    const std::optional<LoopSubsequenceMatch> top_match =
+        find_loop_subsequence(top_face.loops[top_loop_ref.second], top_chain);
+    const std::optional<LoopSubsequenceMatch> bottom_match =
+        find_loop_subsequence(bottom_face.loops[bottom_loop_ref.second], bottom_chain);
+    if (!top_match.has_value() || !bottom_match.has_value()) {
+      continue;
+    }
+
+    GenericSmoothExtrudedBand band;
+    band.top_face_index = top_loop_ref.first;
+    band.bottom_face_index = bottom_loop_ref.first;
+    band.top_loop_index = top_loop_ref.second;
+    band.bottom_loop_index = bottom_loop_ref.second;
+    band.top_loop_start = top_match->start;
+    band.top_loop_span = top_match->span;
+    band.top_forward = top_match->forward;
+    band.bottom_loop_start = bottom_match->start;
+    band.bottom_loop_span = bottom_match->span;
+    band.bottom_forward = bottom_match->forward;
+    band.axis = axis;
+    band.basis = axis_basis;
+    band.top_plane = dot(top_face.fit.centroid, axis);
+    band.bottom_plane = dot(bottom_face.fit.centroid, axis);
+    band.top_profile_points = smooth_profile_points(normalized_top);
+    band.bottom_profile_points = smooth_profile_points(normalized_bottom);
+    band.side_face_indices = component;
+    std::sort(band.side_face_indices.begin(), band.side_face_indices.end());
+    candidates.push_back(std::move(band));
   }
 
   if (candidates.empty()) {
