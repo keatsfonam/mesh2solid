@@ -395,11 +395,11 @@ std::optional<SimplePrismaticStandoffExport> detect_simple_prismatic_standoff_ex
         continue;
       }
 
-      Vec3 axis = normalized(raw_top_face.fit.centroid - raw_bottom_face.fit.centroid);
+      Vec3 axis = normalized(raw_top_face.fit.normal);
       if (length_squared(axis) <= 1e-12) {
         continue;
       }
-      if (dot(axis, raw_top_face.fit.normal) < 0.0) {
+      if (dot(raw_top_face.fit.centroid, axis) < dot(raw_bottom_face.fit.centroid, axis)) {
         axis = axis * -1.0;
       }
       const PlaneBasis axis_basis = basis_from_normal(axis);

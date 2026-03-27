@@ -185,10 +185,17 @@ def voxel_mesh(cells, cell_size=10.0):
     return vertices, faces
 
 
-def box_with_round_bore_mesh(half_size=20.0, radius=8.0, height=20.0, segments=16):
+def box_with_round_bore_mesh(
+    half_size=20.0,
+    radius=8.0,
+    height=20.0,
+    segments=16,
+    center=(0.0, 0.0),
+):
     vertices = []
     vertex_ids = {}
     faces = []
+    center_x, center_y = center
 
     def vertex_id(point):
         key = tuple(round(value, 8) for value in point)
@@ -210,8 +217,8 @@ def box_with_round_bore_mesh(half_size=20.0, radius=8.0, height=20.0, segments=1
     for index in range(segments):
         angle = 2.0 * math.pi * index / segments
         outer_x, outer_y = square_support(angle)
-        inner_x = radius * math.cos(angle)
-        inner_y = radius * math.sin(angle)
+        inner_x = center_x + radius * math.cos(angle)
+        inner_y = center_y + radius * math.sin(angle)
         outer_bottom.append(vertex_id((outer_x, outer_y, 0.0)))
         outer_top.append(vertex_id((outer_x, outer_y, height)))
         inner_bottom.append(vertex_id((inner_x, inner_y, 0.0)))
@@ -235,10 +242,18 @@ def box_with_round_bore_mesh(half_size=20.0, radius=8.0, height=20.0, segments=1
     return vertices, faces
 
 
-def blind_bore_mesh(half_size=20.0, radius=8.0, height=20.0, pocket_depth=12.0, segments=24):
+def blind_bore_mesh(
+    half_size=20.0,
+    radius=8.0,
+    height=20.0,
+    pocket_depth=12.0,
+    segments=24,
+    center=(0.0, 0.0),
+):
     vertices = []
     vertex_ids = {}
     faces = []
+    center_x, center_y = center
 
     def vertex_id(point):
         key = tuple(round(value, 8) for value in point)
@@ -255,7 +270,7 @@ def blind_bore_mesh(half_size=20.0, radius=8.0, height=20.0, pocket_depth=12.0, 
 
     floor_z = height - pocket_depth
     center_bottom = vertex_id((0.0, 0.0, 0.0))
-    center_floor = vertex_id((0.0, 0.0, floor_z))
+    center_floor = vertex_id((center_x, center_y, floor_z))
 
     outer_bottom = []
     outer_top = []
@@ -264,8 +279,8 @@ def blind_bore_mesh(half_size=20.0, radius=8.0, height=20.0, pocket_depth=12.0, 
     for index in range(segments):
         angle = 2.0 * math.pi * index / segments
         outer_x, outer_y = square_support(angle)
-        inner_x = radius * math.cos(angle)
-        inner_y = radius * math.sin(angle)
+        inner_x = center_x + radius * math.cos(angle)
+        inner_y = center_y + radius * math.sin(angle)
         outer_bottom.append(vertex_id((outer_x, outer_y, 0.0)))
         outer_top.append(vertex_id((outer_x, outer_y, height)))
         inner_top.append(vertex_id((inner_x, inner_y, height)))
@@ -297,10 +312,12 @@ def counterbore_mesh(
     height=20.0,
     counterbore_depth=6.0,
     segments=24,
+    center=(0.0, 0.0),
 ):
     vertices = []
     vertex_ids = {}
     faces = []
+    center_x, center_y = center
 
     def vertex_id(point):
         key = tuple(round(value, 8) for value in point)
@@ -325,10 +342,10 @@ def counterbore_mesh(
     for index in range(segments):
         angle = 2.0 * math.pi * index / segments
         outer_x, outer_y = square_support(angle)
-        counterbore_x = counterbore_radius * math.cos(angle)
-        counterbore_y = counterbore_radius * math.sin(angle)
-        through_x = through_radius * math.cos(angle)
-        through_y = through_radius * math.sin(angle)
+        counterbore_x = center_x + counterbore_radius * math.cos(angle)
+        counterbore_y = center_y + counterbore_radius * math.sin(angle)
+        through_x = center_x + through_radius * math.cos(angle)
+        through_y = center_y + through_radius * math.sin(angle)
         outer_bottom.append(vertex_id((outer_x, outer_y, 0.0)))
         outer_top.append(vertex_id((outer_x, outer_y, height)))
         counterbore_top.append(vertex_id((counterbore_x, counterbore_y, height)))
@@ -364,10 +381,18 @@ def counterbore_mesh(
     return vertices, faces
 
 
-def boss_mesh(half_size=20.0, radius=8.0, height=16.0, boss_height=10.0, segments=24):
+def boss_mesh(
+    half_size=20.0,
+    radius=8.0,
+    height=16.0,
+    boss_height=10.0,
+    segments=24,
+    center=(0.0, 0.0),
+):
     vertices = []
     vertex_ids = {}
     faces = []
+    center_x, center_y = center
 
     def vertex_id(point):
         key = tuple(round(value, 8) for value in point)
@@ -383,7 +408,7 @@ def boss_mesh(half_size=20.0, radius=8.0, height=16.0, boss_height=10.0, segment
         return half_size * cosine / scale, half_size * sine / scale
 
     center_bottom = vertex_id((0.0, 0.0, 0.0))
-    center_top = vertex_id((0.0, 0.0, height + boss_height))
+    center_top = vertex_id((center_x, center_y, height + boss_height))
 
     outer_bottom = []
     outer_top = []
@@ -392,8 +417,8 @@ def boss_mesh(half_size=20.0, radius=8.0, height=16.0, boss_height=10.0, segment
     for index in range(segments):
         angle = 2.0 * math.pi * index / segments
         outer_x, outer_y = square_support(angle)
-        boss_x = radius * math.cos(angle)
-        boss_y = radius * math.sin(angle)
+        boss_x = center_x + radius * math.cos(angle)
+        boss_y = center_y + radius * math.sin(angle)
         outer_bottom.append(vertex_id((outer_x, outer_y, 0.0)))
         outer_top.append(vertex_id((outer_x, outer_y, height)))
         boss_base.append(vertex_id((boss_x, boss_y, height)))
@@ -425,10 +450,12 @@ def standoff_mesh(
     base_height=16.0,
     boss_height=10.0,
     segments=24,
+    center=(0.0, 0.0),
 ):
     vertices = []
     vertex_ids = {}
     faces = []
+    center_x, center_y = center
 
     def vertex_id(point):
         key = tuple(round(value, 8) for value in point)
@@ -452,10 +479,10 @@ def standoff_mesh(
     for index in range(segments):
         angle = 2.0 * math.pi * index / segments
         outer_x, outer_y = square_support(angle)
-        hole_x = inner_radius * math.cos(angle)
-        hole_y = inner_radius * math.sin(angle)
-        boss_x = outer_radius * math.cos(angle)
-        boss_y = outer_radius * math.sin(angle)
+        hole_x = center_x + inner_radius * math.cos(angle)
+        hole_y = center_y + inner_radius * math.sin(angle)
+        boss_x = center_x + outer_radius * math.cos(angle)
+        boss_y = center_y + outer_radius * math.sin(angle)
         outer_bottom.append(vertex_id((outer_x, outer_y, 0.0)))
         outer_top.append(vertex_id((outer_x, outer_y, base_height)))
         hole_bottom.append(vertex_id((hole_x, hole_y, 0.0)))
@@ -1297,6 +1324,75 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(step_text.count("ADVANCED_FACE"), 9)
             self.assertEqual(step_text.count("PLANE("), 7)
             self.assertGreaterEqual(step_text.count("FACE_BOUND"), 4)
+
+    def test_off_center_prismatic_cylindrical_features_stay_clean(self):
+        cases = [
+            {
+                "name": "offset_bore",
+                "mesh_fn": box_with_round_bore_mesh,
+                "mesh_kwargs": {"center": (6.0, -4.0)},
+                "expected_cylinders": 1,
+                "expected_advanced_faces": 7,
+                "expected_planes": 6,
+            },
+            {
+                "name": "offset_blind_bore",
+                "mesh_fn": blind_bore_mesh,
+                "mesh_kwargs": {"center": (6.0, -4.0)},
+                "expected_cylinders": 1,
+                "expected_advanced_faces": 8,
+                "expected_planes": 7,
+            },
+            {
+                "name": "offset_counterbore",
+                "mesh_fn": counterbore_mesh,
+                "mesh_kwargs": {"center": (6.0, -4.0)},
+                "expected_cylinders": 2,
+                "expected_advanced_faces": 9,
+                "expected_planes": 7,
+            },
+            {
+                "name": "offset_boss",
+                "mesh_fn": boss_mesh,
+                "mesh_kwargs": {"center": (6.0, -4.0)},
+                "expected_cylinders": 1,
+                "expected_advanced_faces": 8,
+                "expected_planes": 7,
+            },
+            {
+                "name": "offset_standoff",
+                "mesh_fn": standoff_mesh,
+                "mesh_kwargs": {"center": (6.0, -4.0)},
+                "expected_cylinders": 2,
+                "expected_advanced_faces": 9,
+                "expected_planes": 7,
+            },
+        ]
+
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = pathlib.Path(tmp)
+                    mesh_path = tmp_path / f"{case['name']}.stl"
+                    out_dir = tmp_path / "out"
+
+                    vertices, faces = case["mesh_fn"](**case["mesh_kwargs"])
+                    write_ascii_stl(mesh_path, vertices, faces)
+                    _, report, _, _ = run_cli(mesh_path, out_dir)
+
+                    self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+                    self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+                    self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+                    step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+                    self.assertNotIn("FACETED_BREP", step_text)
+                    self.assertEqual(
+                        step_text.count("CYLINDRICAL_SURFACE"), case["expected_cylinders"]
+                    )
+                    self.assertEqual(
+                        step_text.count("ADVANCED_FACE"), case["expected_advanced_faces"]
+                    )
+                    self.assertEqual(step_text.count("PLANE("), case["expected_planes"])
 
     def test_rotated_prismatic_block_with_round_bore_stays_clean(self):
         with tempfile.TemporaryDirectory() as tmp:
