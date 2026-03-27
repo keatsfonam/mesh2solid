@@ -4502,7 +4502,8 @@ std::optional<SimplePrismaticCountersinkExport> detect_simple_prismatic_counters
   return std::nullopt;
 }
 
-std::optional<SimplePrismaticMultiCountersinkExport> detect_simple_prismatic_multi_countersink_export(
+[[maybe_unused]] std::optional<SimplePrismaticMultiCountersinkExport>
+detect_simple_prismatic_multi_countersink_export(
     const ReconstructionResult& reconstruction) {
   if (reconstruction.faces.size() < 10 || reconstruction.vertices.size() < 32) {
     return std::nullopt;
@@ -4887,7 +4888,7 @@ std::optional<SimplePrismaticMultiCountersinkExport> detect_simple_prismatic_mul
   return std::nullopt;
 }
 
-std::optional<SimplePrismaticMixedThroughFeatureExport>
+[[maybe_unused]] std::optional<SimplePrismaticMixedThroughFeatureExport>
 detect_simple_prismatic_mixed_through_feature_export(const ReconstructionResult& reconstruction) {
   if (reconstruction.faces.size() < 8 || reconstruction.vertices.size() < 24) {
     return std::nullopt;
@@ -5995,7 +5996,8 @@ detect_simple_prismatic_axial_through_feature_export(const ReconstructionResult&
   return std::nullopt;
 }
 
-std::optional<SimplePrismaticMultiCounterboreExport> detect_simple_prismatic_multi_counterbore_export(
+[[maybe_unused]] std::optional<SimplePrismaticMultiCounterboreExport>
+detect_simple_prismatic_multi_counterbore_export(
     const ReconstructionResult& reconstruction) {
   if (reconstruction.faces.size() < 12 || reconstruction.vertices.size() < 32) {
     return std::nullopt;
@@ -14315,7 +14317,7 @@ bool write_step_file_prismatic_obround_slot(const std::filesystem::path& path,
   return true;
 }
 
-bool write_step_file_prismatic_multi_countersink(
+[[maybe_unused]] bool write_step_file_prismatic_multi_countersink(
     const std::filesystem::path& path,
     const ReconstructionResult& reconstruction,
     const SimplePrismaticMultiCountersinkExport& countersink_export) {
@@ -14801,7 +14803,7 @@ bool write_step_file_prismatic_multi_countersink(
   return true;
 }
 
-bool write_step_file_prismatic_mixed_through_features(
+[[maybe_unused]] bool write_step_file_prismatic_mixed_through_features(
     const std::filesystem::path& path,
     const ReconstructionResult& reconstruction,
     const SimplePrismaticMixedThroughFeatureExport& feature_export) {
@@ -15847,7 +15849,7 @@ bool write_step_file_prismatic_axial_through_features(
   return true;
 }
 
-bool write_step_file_prismatic_multi_counterbore(
+[[maybe_unused]] bool write_step_file_prismatic_multi_counterbore(
     const std::filesystem::path& path,
     const ReconstructionResult& reconstruction,
     const SimplePrismaticMultiCounterboreExport& counterbore_export) {
