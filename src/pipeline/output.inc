@@ -307,6 +307,21 @@ struct SimplePrismaticBlindBoreExport {
   std::vector<int> outer_face_indices;
 };
 
+struct SimplePrismaticMultiBlindBore {
+  double top_inner_area {};
+  double floor_area {};
+  SimpleCylinderPrimitive bore {};
+};
+
+struct SimplePrismaticMultiBlindBoreExport {
+  int top_face_index {};
+  int bottom_face_index {};
+  std::vector<int> top_outer_loop;
+  std::vector<int> bottom_outer_loop;
+  std::vector<SimplePrismaticMultiBlindBore> bores;
+  std::vector<int> outer_face_indices;
+};
+
 struct SimplePrismaticBlindCounterboreExport {
   int top_face_index {};
   int step_face_index {};
@@ -1727,6 +1742,286 @@ std::optional<SimplePrismaticBlindBoreExport> detect_simple_prismatic_blind_bore
       bore.bore = SimpleCylinderPrimitive {base_center, axis, normalized(radial), top_circle->radius, height};
       bore.outer_face_indices = std::move(outer_face_indices);
       return bore;
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<SimplePrismaticMultiBlindBoreExport> detect_simple_prismatic_multi_blind_bore_export(
+    const ReconstructionResult& reconstruction) {
+  if (reconstruction.faces.size() < 10 || reconstruction.vertices.size() < 24) {
+    return std::nullopt;
+  }
+
+  std::vector<int> top_candidates;
+  std::vector<int> bottom_candidates;
+  std::vector<int> floor_candidates;
+  for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
+    const ReconstructedFace& face = reconstruction.faces[face_index];
+    if (face.loops.size() >= 3) {
+      top_candidates.push_back(static_cast<int>(face_index));
+    } else if (face.loops.size() == 1 && face.loops.front().size() >= 4) {
+      bottom_candidates.push_back(static_cast<int>(face_index));
+      if (face.loops.front().size() >= 8) {
+        floor_candidates.push_back(static_cast<int>(face_index));
+      }
+    }
+  }
+  if (top_candidates.empty() || bottom_candidates.empty() || floor_candidates.size() < 2) {
+    return std::nullopt;
+  }
+
+  for (int top_face_index : top_candidates) {
+    const ReconstructedFace& top_face = reconstruction.faces[top_face_index];
+    Vec3 rough_axis = normalized(top_face.fit.normal);
+    if (length_squared(rough_axis) <= 1e-12) {
+      continue;
+    }
+
+    for (int bottom_face_index : bottom_candidates) {
+      if (bottom_face_index == top_face_index) {
+        continue;
+      }
+
+      const ReconstructedFace& bottom_face = reconstruction.faces[bottom_face_index];
+      if (angle_degrees_unsigned(top_face.fit.normal, bottom_face.fit.normal) > 8.0) {
+        continue;
+      }
+
+      Vec3 axis = rough_axis;
+      if (dot(top_face.fit.centroid - bottom_face.fit.centroid, axis) < 0.0) {
+        axis = axis * -1.0;
+      }
+      const PlaneBasis axis_basis = basis_from_normal(axis);
+      const std::optional<ClassifiedFaceMultiLoops> top_loops =
+          classify_face_loops_outer_inner(top_face, reconstruction.vertices, axis_basis);
+      if (!top_loops.has_value() || top_loops->inner_loops.size() < 2) {
+        continue;
+      }
+
+      const double top_plane = dot(top_face.fit.centroid, axis);
+      const double bottom_plane = dot(bottom_face.fit.centroid, axis);
+      if (top_plane <= bottom_plane + 1e-4) {
+        continue;
+      }
+
+      const std::vector<int>& bottom_outer_loop = bottom_face.loops.front();
+      std::vector<CircleFit2D> top_circles;
+      top_circles.reserve(top_loops->inner_loops.size());
+      bool fit_valid = true;
+      for (const std::vector<int>& loop : top_loops->inner_loops) {
+        const std::optional<CircleFit2D> circle =
+            fit_circle_2d(project_loop_to_basis(loop, reconstruction.vertices, axis_basis));
+        if (!circle.has_value() || circle->radius <= 1e-6) {
+          fit_valid = false;
+          break;
+        }
+        const double tolerance = std::max(circle->radius * 0.03, 1e-4);
+        if (circle->max_error > tolerance) {
+          fit_valid = false;
+          break;
+        }
+        top_circles.push_back(*circle);
+      }
+      if (!fit_valid) {
+        continue;
+      }
+
+      struct PendingBore {
+        std::size_t top_loop_index {};
+        int floor_face_index {};
+        std::vector<int> floor_loop;
+        CircleFit2D floor_circle {};
+        double floor_area {};
+        double floor_plane {};
+      };
+
+      std::vector<bool> matched_floor(reconstruction.faces.size(), false);
+      std::vector<PendingBore> pending;
+      pending.reserve(top_loops->inner_loops.size());
+
+      for (std::size_t top_index = 0; top_index < top_loops->inner_loops.size(); ++top_index) {
+        const CircleFit2D& top_circle = top_circles[top_index];
+        int best_floor_face = -1;
+        double best_score = std::numeric_limits<double>::infinity();
+        PendingBore best_pending;
+        for (int floor_face_index : floor_candidates) {
+          if (matched_floor[floor_face_index] ||
+              floor_face_index == top_face_index ||
+              floor_face_index == bottom_face_index) {
+            continue;
+          }
+
+          const ReconstructedFace& floor_face = reconstruction.faces[floor_face_index];
+          if (angle_degrees_unsigned(top_face.fit.normal, floor_face.fit.normal) > 8.0) {
+            continue;
+          }
+          const double floor_plane = dot(floor_face.fit.centroid, axis);
+          if (floor_plane >= top_plane - 1e-4 || floor_plane <= bottom_plane + 1e-4) {
+            continue;
+          }
+          const std::vector<int>& floor_loop = floor_face.loops.front();
+          const std::optional<CircleFit2D> floor_circle =
+              fit_circle_2d(project_loop_to_basis(floor_loop, reconstruction.vertices, axis_basis));
+          if (!floor_circle.has_value()) {
+            continue;
+          }
+
+          const double tolerance = std::max((top_circle.radius + floor_circle->radius) * 0.015, 1e-4);
+          const Vec2 delta {top_circle.center.x - floor_circle->center.x,
+                            top_circle.center.y - floor_circle->center.y};
+          const double center_distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+          if (std::abs(top_circle.radius - floor_circle->radius) > tolerance ||
+              floor_circle->max_error > tolerance || center_distance > tolerance) {
+            continue;
+          }
+          const double score = center_distance + std::abs(top_circle.radius - floor_circle->radius);
+          if (score < best_score) {
+            best_score = score;
+            best_floor_face = floor_face_index;
+            best_pending = PendingBore {
+                top_index,
+                floor_face_index,
+                floor_loop,
+                *floor_circle,
+                projected_loop_area(floor_loop, reconstruction.vertices, axis_basis),
+                floor_plane,
+            };
+          }
+        }
+
+        if (best_floor_face < 0) {
+          fit_valid = false;
+          break;
+        }
+        matched_floor[best_floor_face] = true;
+        pending.push_back(std::move(best_pending));
+      }
+      if (!fit_valid || pending.size() != top_loops->inner_loops.size()) {
+        continue;
+      }
+
+      std::unordered_set<int> all_inner_vertices;
+      std::vector<std::unordered_set<int>> inner_vertex_sets;
+      inner_vertex_sets.reserve(pending.size());
+      for (const PendingBore& bore : pending) {
+        std::unordered_set<int> inner_vertices;
+        inner_vertices.insert(top_loops->inner_loops[bore.top_loop_index].begin(),
+                              top_loops->inner_loops[bore.top_loop_index].end());
+        inner_vertices.insert(bore.floor_loop.begin(), bore.floor_loop.end());
+        all_inner_vertices.insert(inner_vertices.begin(), inner_vertices.end());
+        inner_vertex_sets.push_back(std::move(inner_vertices));
+      }
+
+      std::vector<int> outer_face_indices;
+      std::vector<int> bore_face_counts(pending.size(), 0);
+      for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
+        if (static_cast<int>(face_index) == top_face_index ||
+            static_cast<int>(face_index) == bottom_face_index) {
+          continue;
+        }
+
+        bool is_floor = false;
+        for (const PendingBore& bore : pending) {
+          if (static_cast<int>(face_index) == bore.floor_face_index) {
+            is_floor = true;
+            break;
+          }
+        }
+        if (is_floor) {
+          continue;
+        }
+
+        const ReconstructedFace& face = reconstruction.faces[face_index];
+        if (face.loops.size() != 1 || face.loops.front().size() < 3) {
+          fit_valid = false;
+          break;
+        }
+
+        bool all_inner = true;
+        for (int vertex_index : face.loops.front()) {
+          if (!all_inner_vertices.contains(vertex_index)) {
+            all_inner = false;
+            break;
+          }
+        }
+        if (!all_inner) {
+          outer_face_indices.push_back(static_cast<int>(face_index));
+          continue;
+        }
+
+        std::size_t matched_bore = pending.size();
+        for (std::size_t bore_index = 0; bore_index < pending.size(); ++bore_index) {
+          bool belongs = true;
+          for (int vertex_index : face.loops.front()) {
+            if (!inner_vertex_sets[bore_index].contains(vertex_index)) {
+              belongs = false;
+              break;
+            }
+          }
+          if (belongs) {
+            matched_bore = bore_index;
+            break;
+          }
+        }
+        if (matched_bore == pending.size()) {
+          fit_valid = false;
+          break;
+        }
+        ++bore_face_counts[matched_bore];
+      }
+
+      if (!fit_valid || outer_face_indices.size() < 4) {
+        continue;
+      }
+      if (std::any_of(bore_face_counts.begin(), bore_face_counts.end(),
+                      [](int count) { return count < 8; })) {
+        continue;
+      }
+
+      std::vector<SimplePrismaticMultiBlindBore> bores;
+      bores.reserve(pending.size());
+      for (const PendingBore& pending_bore : pending) {
+        const CircleFit2D& top_circle = top_circles[pending_bore.top_loop_index];
+        const Vec2 center {
+            0.5 * (top_circle.center.x + pending_bore.floor_circle.center.x),
+            0.5 * (top_circle.center.y + pending_bore.floor_circle.center.y),
+        };
+        const Vec3 axis_origin = axis_basis.u * center.x + axis_basis.v * center.y;
+        const Vec3 base_center = axis_origin + axis * pending_bore.floor_plane;
+        const Vec3 seam_vector =
+            reconstruction.vertices[top_loops->inner_loops[pending_bore.top_loop_index].front()] - base_center;
+        const Vec3 radial = seam_vector - axis * dot(seam_vector, axis);
+        if (length_squared(radial) <= 1e-12) {
+          fit_valid = false;
+          break;
+        }
+
+        SimplePrismaticMultiBlindBore bore;
+        bore.top_inner_area = top_loops->inner_areas[pending_bore.top_loop_index];
+        bore.floor_area = pending_bore.floor_area;
+        bore.bore = SimpleCylinderPrimitive {
+            base_center,
+            axis,
+            normalized(radial),
+            top_circle.radius,
+            top_plane - pending_bore.floor_plane,
+        };
+        bores.push_back(std::move(bore));
+      }
+      if (!fit_valid) {
+        continue;
+      }
+
+      SimplePrismaticMultiBlindBoreExport export_result;
+      export_result.top_face_index = top_face_index;
+      export_result.bottom_face_index = bottom_face_index;
+      export_result.top_outer_loop = top_loops->outer_loop;
+      export_result.bottom_outer_loop = bottom_outer_loop;
+      export_result.bores = std::move(bores);
+      export_result.outer_face_indices = std::move(outer_face_indices);
+      return export_result;
     }
   }
 
@@ -5241,6 +5536,405 @@ bool write_step_file_prismatic_multi_boss(const std::filesystem::path& path,
   return true;
 }
 
+bool write_step_file_prismatic_multi_blind_bore(
+    const std::filesystem::path& path,
+    const ReconstructionResult& reconstruction,
+    const SimplePrismaticMultiBlindBoreExport& bore_export) {
+  StepBuilder step;
+  const StepExportContext context_ids = build_step_export_context(step);
+
+  std::vector<int> point_ids(reconstruction.vertices.size(), 0);
+  for (std::size_t index = 0; index < reconstruction.vertices.size(); ++index) {
+    const Vec3& vertex = reconstruction.vertices[index];
+    point_ids[index] = step.add("CARTESIAN_POINT('',(" + format_double(vertex.x) + "," +
+                                   format_double(vertex.y) + "," + format_double(vertex.z) + "))");
+  }
+
+  std::vector<int> vertex_point_ids(reconstruction.vertices.size(), 0);
+  for (std::size_t index = 0; index < reconstruction.vertices.size(); ++index) {
+    vertex_point_ids[index] = step.add("VERTEX_POINT(''," + step.ref(point_ids[index]) + ")");
+  }
+
+  std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_curve_ids;
+  auto get_line_edge_curve_id = [&](int from, int to) -> int {
+    const EdgeKey key = make_edge_key(from, to);
+    const auto found = edge_curve_ids.find(key);
+    if (found != edge_curve_ids.end()) {
+      return found->second;
+    }
+
+    const Vec3 start = reconstruction.vertices[key.a];
+    const Vec3 end = reconstruction.vertices[key.b];
+    const Vec3 delta = end - start;
+    const double edge_length = length(delta);
+    if (edge_length <= 1e-12) {
+      throw std::runtime_error("Cannot export zero-length STEP edge");
+    }
+
+    const Vec3 direction = normalized(delta);
+    const int direction_id =
+        step.add("DIRECTION('',(" + format_double(direction.x) + "," + format_double(direction.y) +
+                 "," + format_double(direction.z) + "))");
+    const int vector_id = step.add("VECTOR(''," + step.ref(direction_id) + "," +
+                                   format_double(edge_length) + ")");
+    const int line_id = step.add("LINE(''," + step.ref(point_ids[key.a]) + "," +
+                                 step.ref(vector_id) + ")");
+    const int edge_curve_id =
+        step.add("EDGE_CURVE(''," + step.ref(vertex_point_ids[key.a]) + "," +
+                 step.ref(vertex_point_ids[key.b]) + "," + step.ref(line_id) + ",.T.)");
+    edge_curve_ids.emplace(key, edge_curve_id);
+    return edge_curve_id;
+  };
+
+  auto add_line_loop = [&](const std::vector<int>& loop) -> int {
+    std::ostringstream edge_refs;
+    for (std::size_t index = 0; index < loop.size(); ++index) {
+      const int from = loop[index];
+      const int to = loop[(index + 1) % loop.size()];
+      const int edge_curve_id = get_line_edge_curve_id(from, to);
+      const EdgeKey key = make_edge_key(from, to);
+      const bool same_orientation = key.a == from && key.b == to;
+      const int oriented_edge_id =
+          step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
+                   std::string(same_orientation ? ".T." : ".F.") + ")");
+      if (index > 0) {
+        edge_refs << ",";
+      }
+      edge_refs << step.ref(oriented_edge_id);
+    }
+    return step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
+  };
+
+  std::vector<int> top_outer_loop = bore_export.top_outer_loop;
+  std::vector<int> bottom_outer_loop = bore_export.bottom_outer_loop;
+  const Vec3 axis = bore_export.bores.front().bore.axis;
+  const Vec3 ref_direction = bore_export.bores.front().bore.ref_direction;
+  const PlaneBasis axis_basis = basis_from_normal(axis);
+  if (projected_loop_area(top_outer_loop, reconstruction.vertices, axis_basis) < 0.0) {
+    std::reverse(top_outer_loop.begin(), top_outer_loop.end());
+  }
+  if (projected_loop_area(bottom_outer_loop, reconstruction.vertices, axis_basis) > 0.0) {
+    std::reverse(bottom_outer_loop.begin(), bottom_outer_loop.end());
+  }
+
+  const Vec3 top_center = reconstruction.faces[bore_export.top_face_index].fit.centroid;
+  const Vec3 bottom_center = reconstruction.faces[bore_export.bottom_face_index].fit.centroid;
+  const int axis_direction =
+      step.add("DIRECTION('',(" + format_double(axis.x) + "," + format_double(axis.y) + "," +
+               format_double(axis.z) + "))");
+  const int plane_ref_direction =
+      step.add("DIRECTION('',(" + format_double(ref_direction.x) + "," +
+               format_double(ref_direction.y) + "," + format_double(ref_direction.z) + "))");
+  const int top_center_point = step.add("CARTESIAN_POINT('',(" + format_double(top_center.x) + "," +
+                                     format_double(top_center.y) + "," +
+                                     format_double(top_center.z) + "))");
+  const int bottom_center_point =
+      step.add("CARTESIAN_POINT('',(" + format_double(bottom_center.x) + "," +
+               format_double(bottom_center.y) + "," + format_double(bottom_center.z) + "))");
+  const int top_axis = step.add("AXIS2_PLACEMENT_3D(''," + step.ref(top_center_point) + "," +
+                                step.ref(axis_direction) + "," + step.ref(plane_ref_direction) + ")");
+  const int bottom_axis =
+      step.add("AXIS2_PLACEMENT_3D(''," + step.ref(bottom_center_point) + "," +
+               step.ref(axis_direction) + "," + step.ref(plane_ref_direction) + ")");
+  const int top_plane = step.add("PLANE(''," + step.ref(top_axis) + ")");
+  const int bottom_plane = step.add("PLANE(''," + step.ref(bottom_axis) + ")");
+
+  struct CylinderBundle {
+    int top_edge_curve {};
+    int bottom_edge_curve {};
+    int seam_edge_curve {};
+    int lateral_face {};
+  };
+
+  auto add_cylinder_bundle =
+      [&](const SimpleCylinderPrimitive& cylinder, int top_plane_id, int bottom_plane_id) -> CylinderBundle {
+    const Vec3 local_top_center = cylinder.base_center + cylinder.axis * cylinder.height;
+    const Vec3 bottom_seam = cylinder.base_center + cylinder.ref_direction * cylinder.radius;
+    const Vec3 top_seam = local_top_center + cylinder.ref_direction * cylinder.radius;
+    const double circumference = 2.0 * kPi * cylinder.radius;
+
+    const int top_seam_point = step.add("CARTESIAN_POINT('',(" + format_double(top_seam.x) + "," +
+                                       format_double(top_seam.y) + "," +
+                                       format_double(top_seam.z) + "))");
+    const int bottom_seam_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(bottom_seam.x) + "," +
+                 format_double(bottom_seam.y) + "," + format_double(bottom_seam.z) + "))");
+    const int top_seam_vertex = step.add("VERTEX_POINT(''," + step.ref(top_seam_point) + ")");
+    const int bottom_seam_vertex = step.add("VERTEX_POINT(''," + step.ref(bottom_seam_point) + ")");
+
+    const int local_base_center_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(cylinder.base_center.x) + "," +
+                 format_double(cylinder.base_center.y) + "," + format_double(cylinder.base_center.z) + "))");
+    const int local_top_center_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(local_top_center.x) + "," +
+                 format_double(local_top_center.y) + "," + format_double(local_top_center.z) + "))");
+    const int local_axis_direction =
+        step.add("DIRECTION('',(" + format_double(cylinder.axis.x) + "," +
+                 format_double(cylinder.axis.y) + "," + format_double(cylinder.axis.z) + "))");
+    const int local_ref_direction =
+        step.add("DIRECTION('',(" + format_double(cylinder.ref_direction.x) + "," +
+                 format_double(cylinder.ref_direction.y) + "," +
+                 format_double(cylinder.ref_direction.z) + "))");
+
+    const int cylinder_axis =
+        step.add("AXIS2_PLACEMENT_3D(''," + step.ref(local_base_center_point) + "," +
+                 step.ref(local_axis_direction) + "," + step.ref(local_ref_direction) + ")");
+    const int cylinder_surface =
+        step.add("CYLINDRICAL_SURFACE(''," + step.ref(cylinder_axis) + "," +
+                 format_double(cylinder.radius) + ")");
+    const int local_top_axis =
+        step.add("AXIS2_PLACEMENT_3D(''," + step.ref(local_top_center_point) + "," +
+                 step.ref(local_axis_direction) + "," + step.ref(local_ref_direction) + ")");
+    const int local_bottom_axis =
+        step.add("AXIS2_PLACEMENT_3D(''," + step.ref(local_base_center_point) + "," +
+                 step.ref(local_axis_direction) + "," + step.ref(local_ref_direction) + ")");
+
+    const int top_circle = step.add("CIRCLE(''," + step.ref(local_top_axis) + "," +
+                                    format_double(cylinder.radius) + ")");
+    const int top_cyl_pcurve_geom_point =
+        step.add("CARTESIAN_POINT('',(0.0," + format_double(cylinder.height) + "))");
+    const int top_cyl_pcurve_dir = step.add("DIRECTION('',(1.0,0.0))");
+    const int top_cyl_pcurve_vec =
+        step.add("VECTOR(''," + step.ref(top_cyl_pcurve_dir) + ",1.0)");
+    const int top_cyl_pcurve_line =
+        step.add("LINE(''," + step.ref(top_cyl_pcurve_geom_point) + "," +
+                 step.ref(top_cyl_pcurve_vec) + ")");
+    const int top_cyl_pcurve_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(top_cyl_pcurve_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int top_cyl_pcurve =
+        step.add("PCURVE(''," + step.ref(cylinder_surface) + "," + step.ref(top_cyl_pcurve_repr) + ")");
+
+    const int top_plane_origin_2d = step.add("CARTESIAN_POINT('',(0.0,0.0))");
+    const int top_plane_ref_2d = step.add("DIRECTION('',(1.0,0.0))");
+    const int top_circle_axis_2d =
+        step.add("AXIS2_PLACEMENT_2D(''," + step.ref(top_plane_origin_2d) + "," +
+                 step.ref(top_plane_ref_2d) + ")");
+    const int top_circle_2d = step.add("CIRCLE(''," + step.ref(top_circle_axis_2d) + "," +
+                                       format_double(cylinder.radius) + ")");
+    const int top_circle_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(top_circle_2d) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int top_plane_pcurve =
+        step.add("PCURVE(''," + step.ref(top_plane_id) + "," + step.ref(top_circle_repr) + ")");
+    const int top_surface_curve =
+        step.add("SURFACE_CURVE(''," + step.ref(top_circle) + ",(" + step.ref(top_cyl_pcurve) +
+                 "," + step.ref(top_plane_pcurve) + "),.PCURVE_S1.)");
+    const int top_edge_curve =
+        step.add("EDGE_CURVE(''," + step.ref(top_seam_vertex) + "," + step.ref(top_seam_vertex) + "," +
+                 step.ref(top_surface_curve) + ",.T.)");
+
+    const int seam_line_dir = step.add("DIRECTION('',(" + format_double(cylinder.axis.x) + "," +
+                                       format_double(cylinder.axis.y) + "," +
+                                       format_double(cylinder.axis.z) + "))");
+    const int seam_line_vec = step.add("VECTOR(''," + step.ref(seam_line_dir) + ",1.0)");
+    const int seam_line = step.add("LINE(''," + step.ref(bottom_seam_point) + "," +
+                                   step.ref(seam_line_vec) + ")");
+    const int seam_u0_point = step.add("CARTESIAN_POINT('',(0.0,0.0))");
+    const int seam_v_dir = step.add("DIRECTION('',(0.0,1.0))");
+    const int seam_v_vec = step.add("VECTOR(''," + step.ref(seam_v_dir) + ",1.0)");
+    const int seam_u0_line = step.add("LINE(''," + step.ref(seam_u0_point) + "," +
+                                      step.ref(seam_v_vec) + ")");
+    const int seam_u0_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(seam_u0_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int seam_u0_pcurve =
+        step.add("PCURVE(''," + step.ref(cylinder_surface) + "," + step.ref(seam_u0_repr) + ")");
+    const int seam_u1_point =
+        step.add("CARTESIAN_POINT('',(" + format_double(circumference) + ",0.0))");
+    const int seam_u1_line = step.add("LINE(''," + step.ref(seam_u1_point) + "," +
+                                      step.ref(seam_v_vec) + ")");
+    const int seam_u1_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(seam_u1_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int seam_u1_pcurve =
+        step.add("PCURVE(''," + step.ref(cylinder_surface) + "," + step.ref(seam_u1_repr) + ")");
+    const int seam_curve = step.add("SEAM_CURVE(''," + step.ref(seam_line) + ",(" +
+                                    step.ref(seam_u1_pcurve) + "," + step.ref(seam_u0_pcurve) +
+                                    "),.PCURVE_S1.)");
+    const int seam_edge_curve =
+        step.add("EDGE_CURVE(''," + step.ref(bottom_seam_vertex) + "," +
+                 step.ref(top_seam_vertex) + "," + step.ref(seam_curve) + ",.T.)");
+
+    const int bottom_circle = step.add("CIRCLE(''," + step.ref(local_bottom_axis) + "," +
+                                       format_double(cylinder.radius) + ")");
+    const int bottom_cyl_pcurve_geom_point = step.add("CARTESIAN_POINT('',(0.0,0.0))");
+    const int bottom_cyl_pcurve_line =
+        step.add("LINE(''," + step.ref(bottom_cyl_pcurve_geom_point) + "," +
+                 step.ref(top_cyl_pcurve_vec) + ")");
+    const int bottom_cyl_pcurve_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(bottom_cyl_pcurve_line) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int bottom_cyl_pcurve =
+        step.add("PCURVE(''," + step.ref(cylinder_surface) + "," + step.ref(bottom_cyl_pcurve_repr) + ")");
+    const int bottom_plane_origin_2d = step.add("CARTESIAN_POINT('',(0.0,0.0))");
+    const int bottom_plane_ref_2d = step.add("DIRECTION('',(1.0,0.0))");
+    const int bottom_circle_axis_2d =
+        step.add("AXIS2_PLACEMENT_2D(''," + step.ref(bottom_plane_origin_2d) + "," +
+                 step.ref(bottom_plane_ref_2d) + ")");
+    const int bottom_circle_2d =
+        step.add("CIRCLE(''," + step.ref(bottom_circle_axis_2d) + "," +
+                 format_double(cylinder.radius) + ")");
+    const int bottom_circle_repr =
+        step.add("DEFINITIONAL_REPRESENTATION('',(" + step.ref(bottom_circle_2d) + ")," +
+                 step.ref(context_ids.context_2d) + ")");
+    const int bottom_plane_pcurve =
+        step.add("PCURVE(''," + step.ref(bottom_plane_id) + "," + step.ref(bottom_circle_repr) + ")");
+    const int bottom_surface_curve =
+        step.add("SURFACE_CURVE(''," + step.ref(bottom_circle) + ",(" +
+                 step.ref(bottom_cyl_pcurve) + "," + step.ref(bottom_plane_pcurve) +
+                 "),.PCURVE_S1.)");
+    const int bottom_edge_curve =
+        step.add("EDGE_CURVE(''," + step.ref(bottom_seam_vertex) + "," +
+                 step.ref(bottom_seam_vertex) + "," + step.ref(bottom_surface_curve) + ",.T.)");
+
+    const int lateral_top_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(top_edge_curve) + ",.F.)");
+    const int lateral_seam_forward =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(seam_edge_curve) + ",.F.)");
+    const int lateral_bottom_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(bottom_edge_curve) + ",.T.)");
+    const int lateral_seam_backward =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(seam_edge_curve) + ",.T.)");
+    const int lateral_loop = step.add("EDGE_LOOP('',(" + step.ref(lateral_top_oriented) + "," +
+                                      step.ref(lateral_seam_forward) + "," +
+                                      step.ref(lateral_bottom_oriented) + "," +
+                                      step.ref(lateral_seam_backward) + "))");
+    const int lateral_bound = step.add("FACE_BOUND(''," + step.ref(lateral_loop) + ",.T.)");
+    const int lateral_face =
+        step.add("ADVANCED_FACE('',(" + step.ref(lateral_bound) + ")," +
+                 step.ref(cylinder_surface) + ",.T.)");
+    return CylinderBundle {top_edge_curve, bottom_edge_curve, seam_edge_curve, lateral_face};
+  };
+
+  struct BoreFaceBundle {
+    int floor_plane {};
+    CylinderBundle cylinder;
+  };
+
+  std::vector<BoreFaceBundle> bore_bundles;
+  bore_bundles.reserve(bore_export.bores.size());
+  for (const SimplePrismaticMultiBlindBore& bore : bore_export.bores) {
+    const Vec3 floor_center = bore.bore.base_center;
+    const int floor_center_point = step.add("CARTESIAN_POINT('',(" + format_double(floor_center.x) + "," +
+                                        format_double(floor_center.y) + "," +
+                                        format_double(floor_center.z) + "))");
+    const int floor_axis = step.add("AXIS2_PLACEMENT_3D(''," + step.ref(floor_center_point) + "," +
+                                    step.ref(axis_direction) + "," + step.ref(plane_ref_direction) + ")");
+    const int floor_plane = step.add("PLANE(''," + step.ref(floor_axis) + ")");
+    bore_bundles.push_back(BoreFaceBundle {floor_plane, add_cylinder_bundle(bore.bore, top_plane, floor_plane)});
+  }
+
+  const int top_outer_loop_id = add_line_loop(top_outer_loop);
+  std::vector<int> top_bound_ids;
+  top_bound_ids.reserve(1 + bore_export.bores.size());
+  top_bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(top_outer_loop_id) + ",.T.)"));
+  for (std::size_t index = 0; index < bore_export.bores.size(); ++index) {
+    const bool top_circle_forward = bore_export.bores[index].top_inner_area > 0.0;
+    const int top_inner_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(bore_bundles[index].cylinder.top_edge_curve) + "," +
+                 std::string(top_circle_forward ? ".T." : ".F.") + ")");
+    const int top_inner_loop = step.add("EDGE_LOOP('',(" + step.ref(top_inner_oriented) + "))");
+    top_bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(top_inner_loop) + ",.T.)"));
+  }
+  std::ostringstream top_bound_refs;
+  for (std::size_t index = 0; index < top_bound_ids.size(); ++index) {
+    if (index > 0) {
+      top_bound_refs << ",";
+    }
+    top_bound_refs << step.ref(top_bound_ids[index]);
+  }
+  const int top_face = step.add("ADVANCED_FACE('',(" + top_bound_refs.str() + ")," +
+                                step.ref(top_plane) + ",.T.)");
+
+  const int bottom_outer_loop_id = add_line_loop(bottom_outer_loop);
+  const int bottom_outer_bound =
+      step.add("FACE_OUTER_BOUND(''," + step.ref(bottom_outer_loop_id) + ",.T.)");
+  const int bottom_face = step.add("ADVANCED_FACE('',(" + step.ref(bottom_outer_bound) + ")," +
+                                   step.ref(bottom_plane) + ",.F.)");
+
+  std::vector<int> floor_face_ids;
+  floor_face_ids.reserve(bore_export.bores.size());
+  for (std::size_t index = 0; index < bore_export.bores.size(); ++index) {
+    const bool floor_circle_forward = bore_export.bores[index].floor_area > 0.0;
+    const int floor_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(bore_bundles[index].cylinder.bottom_edge_curve) + "," +
+                 std::string(floor_circle_forward ? ".T." : ".F.") + ")");
+    const int floor_loop_id = step.add("EDGE_LOOP('',(" + step.ref(floor_oriented) + "))");
+    const int floor_outer_bound =
+        step.add("FACE_OUTER_BOUND(''," + step.ref(floor_loop_id) + ",.T.)");
+    floor_face_ids.push_back(step.add("ADVANCED_FACE('',(" + step.ref(floor_outer_bound) + ")," +
+                                      step.ref(bore_bundles[index].floor_plane) + ",.T.)"));
+  }
+
+  std::vector<int> side_face_ids;
+  side_face_ids.reserve(bore_export.outer_face_indices.size());
+  for (int face_index : bore_export.outer_face_indices) {
+    const ReconstructedFace& face = reconstruction.faces[face_index];
+    const int plane_origin = step.add("CARTESIAN_POINT('',(" + format_double(face.fit.centroid.x) + "," +
+                                   format_double(face.fit.centroid.y) + "," +
+                                   format_double(face.fit.centroid.z) + "))");
+    const int face_normal = step.add("DIRECTION('',(" + format_double(face.fit.normal.x) + "," +
+                                   format_double(face.fit.normal.y) + "," +
+                                   format_double(face.fit.normal.z) + "))");
+    const PlaneBasis basis = basis_from_normal(face.fit.normal);
+    const int face_ref = step.add("DIRECTION('',(" + format_double(basis.u.x) + "," +
+                                format_double(basis.u.y) + "," + format_double(basis.u.z) + "))");
+    const int axis_placement = step.add("AXIS2_PLACEMENT_3D(''," + step.ref(plane_origin) + "," +
+                                        step.ref(face_normal) + "," + step.ref(face_ref) + ")");
+    const int plane = step.add("PLANE(''," + step.ref(axis_placement) + ")");
+
+    std::vector<int> bound_ids;
+    bound_ids.reserve(face.loops.size());
+    for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
+      const int edge_loop = add_line_loop(face.loops[loop_index]);
+      if (loop_index == 0) {
+        bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
+      } else {
+        bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
+      }
+    }
+
+    std::ostringstream bound_refs;
+    for (std::size_t index = 0; index < bound_ids.size(); ++index) {
+      if (index > 0) {
+        bound_refs << ",";
+      }
+      bound_refs << step.ref(bound_ids[index]);
+    }
+    side_face_ids.push_back(
+        step.add("ADVANCED_FACE('',(" + bound_refs.str() + ")," + step.ref(plane) + ",.T.)"));
+  }
+
+  std::ostringstream shell_faces;
+  shell_faces << step.ref(top_face) << "," << step.ref(bottom_face);
+  for (std::size_t index = 0; index < bore_export.bores.size(); ++index) {
+    shell_faces << "," << step.ref(floor_face_ids[index]) << ","
+                << step.ref(bore_bundles[index].cylinder.lateral_face);
+  }
+  for (int face_id : side_face_ids) {
+    shell_faces << "," << step.ref(face_id);
+  }
+  const int closed_shell = step.add("CLOSED_SHELL('',(" + shell_faces.str() + "))");
+  const int manifold_solid_brep =
+      step.add("MANIFOLD_SOLID_BREP('mesh2solid'," + step.ref(closed_shell) + ")");
+  const int shape_representation =
+      step.add("ADVANCED_BREP_SHAPE_REPRESENTATION('',(" + step.ref(manifold_solid_brep) + "," +
+               step.ref(context_ids.global_axis) + ")," + step.ref(context_ids.context) + ")");
+  step.add("SHAPE_DEFINITION_REPRESENTATION(" + step.ref(context_ids.product_shape) + "," +
+           step.ref(shape_representation) + ")");
+
+  std::ofstream output(path);
+  if (!output) {
+    throw std::runtime_error("Unable to write STEP file: " + path.string());
+  }
+  output << step_header();
+  output << step.emit();
+  output << "ENDSEC;\n";
+  output << "END-ISO-10303-21;\n";
+  return true;
+}
+
 bool write_step_file_prismatic_standoff(const std::filesystem::path& path,
                                         const ReconstructionResult& reconstruction,
                                         const SimplePrismaticStandoffExport& standoff) {
@@ -6864,6 +7558,12 @@ bool write_step_file(const std::filesystem::path& path,
           detect_simple_prismatic_blind_bore_export(reconstruction);
       blind_bore.has_value()) {
     return write_step_file_prismatic_blind_bore(path, reconstruction, *blind_bore);
+  }
+
+  if (const std::optional<SimplePrismaticMultiBlindBoreExport> multi_blind_bore =
+          detect_simple_prismatic_multi_blind_bore_export(reconstruction);
+      multi_blind_bore.has_value()) {
+    return write_step_file_prismatic_multi_blind_bore(path, reconstruction, *multi_blind_bore);
   }
 
   if (const std::optional<SimplePrismaticBlindCounterboreExport> blind_counterbore =
