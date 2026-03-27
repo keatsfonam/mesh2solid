@@ -14,5 +14,6 @@ Fragment layout:
 - `output_step_loop.inc`: shared STEP loop, edge, and planar-face writing helpers for analytic export families
 - `output_axial.inc`: shared-cap axial through-feature STEP writers
 - `output_cylindrical.inc`: mixed cylindrical-feature STEP writers
+- `output_obround.inc`: obround-slot STEP writer
 
 This is an internal organization tool, not a public API boundary.
