@@ -1023,6 +1023,179 @@ def block_with_two_countersinks_mesh(
     return vertices, faces
 
 
+def block_with_bore_and_countersink_mesh(
+    half_size=24.0,
+    through_radius=4.0,
+    countersink_radius=7.0,
+    offset=10.0,
+    height=18.0,
+    countersink_depth=5.0,
+    segments=16,
+):
+    if segments % 4 != 0:
+        raise ValueError("segments must be divisible by 4")
+
+    vertices = []
+    vertex_ids = {}
+    faces = []
+    z_step = height - countersink_depth
+
+    def vertex_id(point):
+        key = tuple(round(value, 8) for value in point)
+        if key not in vertex_ids:
+            vertex_ids[key] = len(vertices)
+            vertices.append(tuple(float(value) for value in point))
+        return vertex_ids[key]
+
+    def add_strip(left_ids, right_ids, top=True):
+        for index in range(len(left_ids) - 1):
+            a0 = left_ids[index]
+            a1 = left_ids[index + 1]
+            b0 = right_ids[index]
+            b1 = right_ids[index + 1]
+            if top:
+                faces.append((a0, b0, b1))
+                faces.append((a0, b1, a1))
+            else:
+                faces.append((a0, b1, b0))
+                faces.append((a0, a1, b1))
+
+    half_step = segments // 4
+    right_half_angles = [
+        math.pi / 2.0 - math.pi * index / (2.0 * half_step)
+        for index in range(2 * half_step + 1)
+    ]
+    left_half_angles = [
+        math.pi / 2.0 + math.pi * index / (2.0 * half_step)
+        for index in range(2 * half_step + 1)
+    ]
+    full_angles = [2.0 * math.pi * index / segments for index in range(segments)]
+
+    def circle_ids(center_x, radius, z, angles):
+        return [
+            vertex_id((center_x + radius * math.cos(angle), radius * math.sin(angle), z))
+            for angle in angles
+        ]
+
+    top_left_out = circle_ids(-offset, through_radius, height, left_half_angles)
+    top_left_in = circle_ids(-offset, through_radius, height, right_half_angles)
+    top_right_in = circle_ids(offset, countersink_radius, height, left_half_angles)
+    top_right_out = circle_ids(offset, countersink_radius, height, right_half_angles)
+
+    bottom_left_out = circle_ids(-offset, through_radius, 0.0, left_half_angles)
+    bottom_left_in = circle_ids(-offset, through_radius, 0.0, right_half_angles)
+    bottom_right_in = circle_ids(offset, through_radius, 0.0, left_half_angles)
+    bottom_right_out = circle_ids(offset, through_radius, 0.0, right_half_angles)
+
+    left_square_top = [
+        vertex_id((-half_size, through_radius * math.sin(angle), height))
+        for angle in left_half_angles
+    ]
+    right_square_top = [
+        vertex_id((half_size, countersink_radius * math.sin(angle), height))
+        for angle in right_half_angles
+    ]
+    left_square_bottom = [
+        vertex_id((-half_size, through_radius * math.sin(angle), 0.0))
+        for angle in left_half_angles
+    ]
+    right_square_bottom = [
+        vertex_id((half_size, through_radius * math.sin(angle), 0.0))
+        for angle in right_half_angles
+    ]
+
+    top_lt = vertex_id((-half_size, half_size, height))
+    top_lm = vertex_id((-offset, half_size, height))
+    top_rm = vertex_id((offset, half_size, height))
+    top_rt = vertex_id((half_size, half_size, height))
+    top_rb = vertex_id((half_size, -half_size, height))
+    top_rmb = vertex_id((offset, -half_size, height))
+    top_lmb = vertex_id((-offset, -half_size, height))
+    top_lb = vertex_id((-half_size, -half_size, height))
+    bottom_lt = vertex_id((-half_size, half_size, 0.0))
+    bottom_lm = vertex_id((-offset, half_size, 0.0))
+    bottom_rm = vertex_id((offset, half_size, 0.0))
+    bottom_rt = vertex_id((half_size, half_size, 0.0))
+    bottom_rb = vertex_id((half_size, -half_size, 0.0))
+    bottom_rmb = vertex_id((offset, -half_size, 0.0))
+    bottom_lmb = vertex_id((-offset, -half_size, 0.0))
+    bottom_lb = vertex_id((-half_size, -half_size, 0.0))
+
+    faces.extend(
+        [
+            (top_lt, top_lm, left_square_top[0]),
+            (top_lm, top_left_in[0], left_square_top[0]),
+            (top_lm, top_rm, top_right_in[0]),
+            (top_lm, top_right_in[0], top_left_in[0]),
+            (top_rm, top_rt, right_square_top[0]),
+            (top_rm, right_square_top[0], top_right_in[0]),
+            (left_square_top[-1], top_lmb, top_lb),
+            (left_square_top[-1], top_left_in[-1], top_lmb),
+            (top_left_in[-1], top_right_in[-1], top_rmb),
+            (top_left_in[-1], top_rmb, top_lmb),
+            (top_right_in[-1], right_square_top[-1], top_rb),
+            (top_right_in[-1], top_rb, top_rmb),
+        ]
+    )
+    add_strip(left_square_top, top_left_out, top=True)
+    add_strip(top_left_in, top_right_in, top=True)
+    add_strip(top_right_out, right_square_top, top=True)
+
+    faces.extend(
+        [
+            (bottom_lt, left_square_bottom[0], bottom_left_in[0]),
+            (bottom_lt, bottom_left_in[0], bottom_lm),
+            (bottom_lm, bottom_left_in[0], bottom_right_in[0]),
+            (bottom_lm, bottom_right_in[0], bottom_rm),
+            (bottom_rm, bottom_right_in[0], right_square_bottom[0]),
+            (bottom_rm, right_square_bottom[0], bottom_rt),
+            (left_square_bottom[-1], bottom_lb, bottom_lmb),
+            (left_square_bottom[-1], bottom_lmb, bottom_left_in[-1]),
+            (bottom_left_in[-1], bottom_lmb, bottom_rmb),
+            (bottom_left_in[-1], bottom_rmb, bottom_right_in[-1]),
+            (bottom_right_in[-1], bottom_rmb, bottom_rb),
+            (bottom_right_in[-1], bottom_rb, right_square_bottom[-1]),
+        ]
+    )
+    add_strip(left_square_bottom, bottom_left_out, top=False)
+    add_strip(bottom_left_in, bottom_right_in, top=False)
+    add_strip(bottom_right_out, right_square_bottom, top=False)
+
+    add_strip(
+        [bottom_lt] + left_square_bottom + [bottom_lb],
+        [top_lt] + left_square_top + [top_lb],
+        top=True,
+    )
+    add_strip(
+        [top_rt] + right_square_top + [top_rb],
+        [bottom_rt] + right_square_bottom + [bottom_rb],
+        top=True,
+    )
+    add_strip([bottom_lt, bottom_lm, bottom_rm, bottom_rt], [top_lt, top_lm, top_rm, top_rt], top=True)
+    add_strip([top_rb, top_rmb, top_lmb, top_lb], [bottom_rb, bottom_rmb, bottom_lmb, bottom_lb], top=True)
+
+    top_left_circle = circle_ids(-offset, through_radius, height, full_angles)
+    bottom_left_circle = circle_ids(-offset, through_radius, 0.0, full_angles)
+    top_right_circle = circle_ids(offset, countersink_radius, height, full_angles)
+    step_right_circle = circle_ids(offset, through_radius, z_step, full_angles)
+    bottom_right_circle = circle_ids(offset, through_radius, 0.0, full_angles)
+
+    for top_loop, bottom_loop in ((top_left_circle, bottom_left_circle),):
+        for index in range(segments):
+            next_index = (index + 1) % segments
+            faces.append((bottom_loop[index], top_loop[next_index], bottom_loop[next_index]))
+            faces.append((bottom_loop[index], top_loop[index], top_loop[next_index]))
+
+    for index in range(segments):
+        next_index = (index + 1) % segments
+        faces.append((step_right_circle[index], top_right_circle[next_index], step_right_circle[next_index]))
+        faces.append((step_right_circle[index], top_right_circle[index], top_right_circle[next_index]))
+        faces.append((bottom_right_circle[index], step_right_circle[next_index], bottom_right_circle[next_index]))
+        faces.append((bottom_right_circle[index], step_right_circle[index], step_right_circle[next_index]))
+
+    return vertices, faces
+
+
 def block_with_two_counterbores_mesh(
     half_size=24.0,
     through_radius=4.0,
@@ -3001,6 +3174,60 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 0)
             self.assertEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 0)
             self.assertEqual(step_text.count("ADVANCED_FACE"), 10)
+            self.assertEqual(step_text.count("PLANE("), 6)
+
+    def test_prismatic_block_with_bore_and_countersink_exports_clean_mix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "bore_and_countersink.stl"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = block_with_bore_and_countersink_mesh()
+            write_ascii_stl(mesh_path, vertices, faces)
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertNotIn("FACETED_BREP", step_text)
+            self.assertEqual(step_text.count("CONICAL_SURFACE"), 1)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 2)
+            self.assertEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 0)
+            self.assertEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 0)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 9)
+            self.assertEqual(step_text.count("PLANE("), 6)
+            self.assertGreaterEqual(step_text.count("FACE_BOUND"), 4)
+
+    def test_rotated_bore_and_countersink_stays_clean(self):
+        angle = math.radians(22.0)
+        rotation = (
+            (math.cos(angle), -math.sin(angle), 0.0),
+            (math.sin(angle), math.cos(angle), 0.0),
+            (0.0, 0.0, 1.0),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "rotated_bore_and_countersink.stl"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = block_with_bore_and_countersink_mesh()
+            vertices = transform_mesh(vertices, rotation=rotation)
+            write_ascii_stl(mesh_path, vertices, faces)
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertEqual(step_text.count("CONICAL_SURFACE"), 1)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 2)
+            self.assertEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 0)
+            self.assertEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 0)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 9)
             self.assertEqual(step_text.count("PLANE("), 6)
 
     def test_prismatic_block_with_two_counterbores_exports_clean_cylinders(self):
