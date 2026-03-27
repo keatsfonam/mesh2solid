@@ -158,7 +158,8 @@ and standoff-style tubular
 bosses with concentric through-holes, plus repeated multi-blind-bore and repeated multi-blind-counterbore
 pocket patterns, obround through-slots with analytic half-cylinders, and benchmark-derived
 planar bodies whose faceted circular through-holes are upgraded to analytic cylinders at STEP export,
-including bodies with multiple distinct cap-face pairs in the same part.
+including bodies with multiple distinct cap-face pairs in the same part plus mixed blind cylindrical
+features on more complex planar supports.
 
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
 with upstream STL and 3MF models. Those smoke tests intentionally keep separate expectation

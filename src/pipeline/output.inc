@@ -460,6 +460,26 @@ struct GenericCylindricalThroughHoleExport {
   std::vector<GenericCylindricalThroughHole> holes;
 };
 
+struct GenericCylindricalBlindFeature {
+  int support_face_index {};
+  int cap_face_index {};
+  std::size_t support_loop_index {};
+  double support_loop_area {};
+  double cap_loop_area {};
+  SimpleCylinderPrimitive cylinder {};
+  std::vector<int> side_face_indices;
+  bool support_is_top {};
+};
+
+struct GenericCylindricalBlindFeatureExport {
+  std::vector<GenericCylindricalBlindFeature> features;
+};
+
+struct GenericCylindricalFeatureExport {
+  std::vector<GenericCylindricalThroughHole> holes;
+  std::vector<GenericCylindricalBlindFeature> blind_features;
+};
+
 std::vector<double> projected_face_loop_areas(const ReconstructedFace& face,
                                               const std::vector<Vec3>& vertices,
                                               const PlaneBasis& basis) {
@@ -469,6 +489,11 @@ std::vector<double> projected_face_loop_areas(const ReconstructedFace& face,
     areas.push_back(projected_loop_area(loop, vertices, basis));
   }
   return areas;
+}
+
+std::uint64_t make_face_loop_key(int face_index, std::size_t loop_index) {
+  return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(face_index)) << 32U) |
+         static_cast<std::uint64_t>(loop_index);
 }
 
 std::optional<std::size_t> outer_loop_index_from_areas(const std::vector<double>& areas) {
@@ -3894,6 +3919,294 @@ std::optional<GenericCylindricalThroughHoleExport> detect_generic_cylindrical_th
     return std::nullopt;
   }
   return export_result;
+}
+
+std::optional<GenericCylindricalBlindFeatureExport> detect_generic_cylindrical_blind_feature_export(
+    const ReconstructionResult& reconstruction) {
+  if (reconstruction.faces.size() < 8 || reconstruction.vertices.size() < 20) {
+    return std::nullopt;
+  }
+
+  std::vector<int> support_candidates;
+  std::vector<int> cap_candidates;
+  for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
+    const ReconstructedFace& face = reconstruction.faces[face_index];
+    if (face.loops.size() >= 2) {
+      support_candidates.push_back(static_cast<int>(face_index));
+    } else if (face.loops.size() == 1 && face.loops.front().size() >= 8) {
+      cap_candidates.push_back(static_cast<int>(face_index));
+    }
+  }
+  if (support_candidates.empty() || cap_candidates.empty()) {
+    return std::nullopt;
+  }
+
+  struct IndexedCircleLoop {
+    std::size_t loop_index {};
+    std::vector<int> loop;
+    double area {};
+    CircleFit2D circle {};
+  };
+
+  std::vector<GenericCylindricalBlindFeature> candidate_features;
+  for (int support_face_index : support_candidates) {
+    const ReconstructedFace& support_face = reconstruction.faces[support_face_index];
+    Vec3 axis = normalized(support_face.fit.normal);
+    if (length_squared(axis) <= 1e-12) {
+      continue;
+    }
+
+    const PlaneBasis axis_basis = basis_from_normal(axis);
+    const std::vector<double> support_areas =
+        projected_face_loop_areas(support_face, reconstruction.vertices, axis_basis);
+    const std::optional<std::size_t> outer_loop_index = outer_loop_index_from_areas(support_areas);
+    if (!outer_loop_index.has_value()) {
+      continue;
+    }
+
+    std::vector<IndexedCircleLoop> support_loops;
+    for (std::size_t loop_index = 0; loop_index < support_face.loops.size(); ++loop_index) {
+      if (loop_index == *outer_loop_index || support_face.loops[loop_index].size() < 8) {
+        continue;
+      }
+      const std::optional<CircleFit2D> circle =
+          fit_circle_2d(project_loop_to_basis(support_face.loops[loop_index], reconstruction.vertices, axis_basis));
+      if (!circle.has_value() || circle->radius <= 1e-6) {
+        continue;
+      }
+      const double tolerance = std::max(circle->radius * 0.03, 1e-4);
+      if (circle->max_error > tolerance) {
+        continue;
+      }
+      support_loops.push_back(
+          {loop_index, support_face.loops[loop_index], support_areas[loop_index], *circle});
+    }
+    if (support_loops.empty()) {
+      continue;
+    }
+
+    const double support_plane = dot(support_face.fit.centroid, axis);
+    for (int cap_face_index : cap_candidates) {
+      if (cap_face_index == support_face_index) {
+        continue;
+      }
+
+      const ReconstructedFace& cap_face = reconstruction.faces[cap_face_index];
+      if (angle_degrees_unsigned(support_face.fit.normal, cap_face.fit.normal) > 8.0) {
+        continue;
+      }
+
+      const std::vector<int>& cap_loop = cap_face.loops.front();
+      const std::optional<CircleFit2D> cap_circle =
+          fit_circle_2d(project_loop_to_basis(cap_loop, reconstruction.vertices, axis_basis));
+      if (!cap_circle.has_value() || cap_circle->radius <= 1e-6) {
+        continue;
+      }
+      const double cap_tolerance = std::max(cap_circle->radius * 0.03, 1e-4);
+      if (cap_circle->max_error > cap_tolerance) {
+        continue;
+      }
+
+      const double cap_plane = dot(cap_face.fit.centroid, axis);
+      for (const IndexedCircleLoop& support_loop : support_loops) {
+        const double match_tolerance =
+            std::max((support_loop.circle.radius + cap_circle->radius) * 0.015, 1e-4);
+        const Vec2 center_delta {support_loop.circle.center.x - cap_circle->center.x,
+                                 support_loop.circle.center.y - cap_circle->center.y};
+        const double center_distance =
+            std::sqrt(center_delta.x * center_delta.x + center_delta.y * center_delta.y);
+        if (std::abs(support_loop.circle.radius - cap_circle->radius) > match_tolerance ||
+            center_distance > match_tolerance ||
+            std::abs(cap_plane - support_plane) <= match_tolerance) {
+          continue;
+        }
+
+        std::unordered_set<int> cylinder_vertices;
+        cylinder_vertices.insert(support_loop.loop.begin(), support_loop.loop.end());
+        cylinder_vertices.insert(cap_loop.begin(), cap_loop.end());
+
+        std::vector<int> side_face_indices;
+        side_face_indices.reserve(support_loop.loop.size());
+        for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
+          if (static_cast<int>(face_index) == support_face_index ||
+              static_cast<int>(face_index) == cap_face_index) {
+            continue;
+          }
+
+          const ReconstructedFace& face = reconstruction.faces[face_index];
+          if (face.loops.size() != 1 || face.loops.front().size() < 4) {
+            continue;
+          }
+          if (angle_degrees_unsigned(face.fit.normal, axis) < 20.0) {
+            continue;
+          }
+
+          bool all_cylinder_vertices = true;
+          for (int vertex_index : face.loops.front()) {
+            if (!cylinder_vertices.contains(vertex_index)) {
+              all_cylinder_vertices = false;
+              break;
+            }
+          }
+          if (!all_cylinder_vertices) {
+            continue;
+          }
+
+          int support_vertices = 0;
+          int cap_vertices = 0;
+          int intermediate_vertices = 0;
+          for (int vertex_index : face.loops.front()) {
+            const double coordinate = dot(reconstruction.vertices[vertex_index], axis);
+            if (std::abs(coordinate - support_plane) <= match_tolerance) {
+              ++support_vertices;
+            } else if (std::abs(coordinate - cap_plane) <= match_tolerance) {
+              ++cap_vertices;
+            } else {
+              ++intermediate_vertices;
+            }
+          }
+          if (support_vertices < 2 || cap_vertices < 2 || intermediate_vertices != 0) {
+            continue;
+          }
+
+          side_face_indices.push_back(static_cast<int>(face_index));
+        }
+
+        if (side_face_indices.size() < 6) {
+          continue;
+        }
+
+        const bool support_is_top = support_plane > cap_plane;
+        const double top_plane = std::max(support_plane, cap_plane);
+        const double bottom_plane = std::min(support_plane, cap_plane);
+        const double radius = 0.5 * (support_loop.circle.radius + cap_circle->radius);
+        const Vec2 center {
+            0.5 * (support_loop.circle.center.x + cap_circle->center.x),
+            0.5 * (support_loop.circle.center.y + cap_circle->center.y),
+        };
+        const Vec3 axis_origin = axis_basis.u * center.x + axis_basis.v * center.y;
+        const Vec3 base_center = axis_origin + axis * bottom_plane;
+        const std::vector<int>& bottom_loop = support_is_top ? cap_loop : support_loop.loop;
+        const Vec3 seam_vector = reconstruction.vertices[bottom_loop.front()] - base_center;
+        const Vec3 radial = seam_vector - axis * dot(seam_vector, axis);
+        if (length_squared(radial) <= 1e-12) {
+          continue;
+        }
+
+        candidate_features.push_back(GenericCylindricalBlindFeature {
+            support_face_index,
+            cap_face_index,
+            support_loop.loop_index,
+            support_loop.area,
+            projected_loop_area(cap_loop, reconstruction.vertices, axis_basis),
+            SimpleCylinderPrimitive {base_center, axis, normalized(radial), radius, top_plane - bottom_plane},
+            side_face_indices,
+            support_is_top,
+        });
+      }
+    }
+  }
+
+  if (candidate_features.empty()) {
+    return std::nullopt;
+  }
+
+  std::sort(candidate_features.begin(),
+            candidate_features.end(),
+            [](const GenericCylindricalBlindFeature& lhs, const GenericCylindricalBlindFeature& rhs) {
+              if (lhs.side_face_indices.size() != rhs.side_face_indices.size()) {
+                return lhs.side_face_indices.size() > rhs.side_face_indices.size();
+              }
+              if (std::abs(lhs.cylinder.radius - rhs.cylinder.radius) > 1e-9) {
+                return lhs.cylinder.radius > rhs.cylinder.radius;
+              }
+              if (lhs.support_face_index != rhs.support_face_index) {
+                return lhs.support_face_index < rhs.support_face_index;
+              }
+              return lhs.support_loop_index < rhs.support_loop_index;
+            });
+
+  std::unordered_set<std::uint64_t> used_loops;
+  std::unordered_set<int> used_side_faces;
+  GenericCylindricalBlindFeatureExport export_result;
+  for (const GenericCylindricalBlindFeature& feature : candidate_features) {
+    const std::uint64_t support_key =
+        make_face_loop_key(feature.support_face_index, feature.support_loop_index);
+    const std::uint64_t cap_key = make_face_loop_key(feature.cap_face_index, 0);
+    if (used_loops.contains(support_key) || used_loops.contains(cap_key)) {
+      continue;
+    }
+
+    bool side_conflict = false;
+    for (int face_index : feature.side_face_indices) {
+      if (used_side_faces.contains(face_index)) {
+        side_conflict = true;
+        break;
+      }
+    }
+    if (side_conflict) {
+      continue;
+    }
+
+    used_loops.insert(support_key);
+    used_loops.insert(cap_key);
+    used_side_faces.insert(feature.side_face_indices.begin(), feature.side_face_indices.end());
+    export_result.features.push_back(feature);
+  }
+
+  if (export_result.features.empty()) {
+    return std::nullopt;
+  }
+  return export_result;
+}
+
+std::optional<GenericCylindricalFeatureExport> merge_generic_cylindrical_feature_exports(
+    const std::optional<GenericCylindricalThroughHoleExport>& holes,
+    const std::optional<GenericCylindricalBlindFeatureExport>& blind_features) {
+  GenericCylindricalFeatureExport merged;
+  std::unordered_set<std::uint64_t> used_loops;
+  std::unordered_set<int> used_side_faces;
+
+  if (holes.has_value()) {
+    merged.holes = holes->holes;
+    for (const GenericCylindricalThroughHole& hole : holes->holes) {
+      used_loops.insert(make_face_loop_key(hole.top_face_index, hole.top_loop_index));
+      used_loops.insert(make_face_loop_key(hole.bottom_face_index, hole.bottom_loop_index));
+      used_side_faces.insert(hole.side_face_indices.begin(), hole.side_face_indices.end());
+    }
+  }
+
+  if (blind_features.has_value()) {
+    for (const GenericCylindricalBlindFeature& feature : blind_features->features) {
+      const std::uint64_t support_key =
+          make_face_loop_key(feature.support_face_index, feature.support_loop_index);
+      const std::uint64_t cap_key = make_face_loop_key(feature.cap_face_index, 0);
+      if (used_loops.contains(support_key) || used_loops.contains(cap_key)) {
+        continue;
+      }
+
+      bool side_conflict = false;
+      for (int face_index : feature.side_face_indices) {
+        if (used_side_faces.contains(face_index)) {
+          side_conflict = true;
+          break;
+        }
+      }
+      if (side_conflict) {
+        continue;
+      }
+
+      used_loops.insert(support_key);
+      used_loops.insert(cap_key);
+      used_side_faces.insert(feature.side_face_indices.begin(), feature.side_face_indices.end());
+      merged.blind_features.push_back(feature);
+    }
+  }
+
+  if (merged.holes.empty() && merged.blind_features.empty()) {
+    return std::nullopt;
+  }
+  return merged;
 }
 
 class StepBuilder {
@@ -8956,10 +9269,10 @@ bool write_step_file_prismatic_multi_counterbore(
   return true;
 }
 
-bool write_step_file_generic_cylindrical_holes(
+bool write_step_file_generic_cylindrical_features(
     const std::filesystem::path& path,
     const ReconstructionResult& reconstruction,
-    const GenericCylindricalThroughHoleExport& hole_export) {
+    const GenericCylindricalFeatureExport& feature_export) {
   StepBuilder step;
   const StepExportContext context_ids = build_step_export_context(step);
 
@@ -9044,34 +9357,68 @@ bool write_step_file_generic_cylindrical_holes(
     bool is_top {};
     double area {};
   };
-
-  auto make_loop_key = [](int face_index, std::size_t loop_index) -> std::uint64_t {
-    return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(face_index)) << 32U) |
-           static_cast<std::uint64_t>(loop_index);
+  struct BlindSupportLoopRef {
+    std::size_t feature_index {};
+    bool use_top_edge {};
+    double area {};
+  };
+  struct BlindCapFaceRef {
+    std::size_t feature_index {};
+    bool use_top_edge {};
+    double area {};
   };
 
   std::unordered_set<int> omitted_side_faces;
   std::unordered_map<std::uint64_t, HoleLoopRef> hole_loop_refs;
+  std::unordered_map<std::uint64_t, BlindSupportLoopRef> blind_support_loop_refs;
+  std::unordered_map<int, BlindCapFaceRef> blind_cap_face_refs;
   std::vector<StepCylinderBundle> hole_bundles;
-  hole_bundles.reserve(hole_export.holes.size());
-  for (std::size_t hole_index = 0; hole_index < hole_export.holes.size(); ++hole_index) {
-    const GenericCylindricalThroughHole& hole = hole_export.holes[hole_index];
+  hole_bundles.reserve(feature_export.holes.size());
+  for (std::size_t hole_index = 0; hole_index < feature_export.holes.size(); ++hole_index) {
+    const GenericCylindricalThroughHole& hole = feature_export.holes[hole_index];
     const StepPlaneSurface& top_plane = get_face_plane(hole.top_face_index);
     const StepPlaneSurface& bottom_plane = get_face_plane(hole.bottom_face_index);
     hole_bundles.push_back(add_step_cylinder_bundle(step, context_ids, hole.cylinder, top_plane, bottom_plane));
     hole_loop_refs.emplace(
-        make_loop_key(hole.top_face_index, hole.top_loop_index),
+        make_face_loop_key(hole.top_face_index, hole.top_loop_index),
         HoleLoopRef {hole_index, true, hole.top_loop_area});
     hole_loop_refs.emplace(
-        make_loop_key(hole.bottom_face_index, hole.bottom_loop_index),
+        make_face_loop_key(hole.bottom_face_index, hole.bottom_loop_index),
         HoleLoopRef {hole_index, false, hole.bottom_loop_area});
     omitted_side_faces.insert(hole.side_face_indices.begin(), hole.side_face_indices.end());
   }
 
-  std::unordered_set<int> special_cap_faces;
-  for (const GenericCylindricalThroughHole& hole : hole_export.holes) {
-    special_cap_faces.insert(hole.top_face_index);
-    special_cap_faces.insert(hole.bottom_face_index);
+  std::vector<StepCylinderBundle> blind_bundles;
+  blind_bundles.reserve(feature_export.blind_features.size());
+  for (std::size_t feature_index = 0; feature_index < feature_export.blind_features.size(); ++feature_index) {
+    const GenericCylindricalBlindFeature& feature = feature_export.blind_features[feature_index];
+    const StepPlaneSurface& support_plane = get_face_plane(feature.support_face_index);
+    const StepPlaneSurface& cap_plane = get_face_plane(feature.cap_face_index);
+    const StepPlaneSurface& top_plane = feature.support_is_top ? support_plane : cap_plane;
+    const StepPlaneSurface& bottom_plane = feature.support_is_top ? cap_plane : support_plane;
+    blind_bundles.push_back(
+        add_step_cylinder_bundle(step, context_ids, feature.cylinder, top_plane, bottom_plane));
+    blind_support_loop_refs.emplace(
+        make_face_loop_key(feature.support_face_index, feature.support_loop_index),
+        BlindSupportLoopRef {feature_index, feature.support_is_top, feature.support_loop_area});
+    blind_cap_face_refs.emplace(
+        feature.cap_face_index,
+        BlindCapFaceRef {feature_index, !feature.support_is_top, feature.cap_loop_area});
+    omitted_side_faces.insert(feature.side_face_indices.begin(), feature.side_face_indices.end());
+  }
+
+  std::unordered_set<int> special_loop_faces;
+  for (const GenericCylindricalThroughHole& hole : feature_export.holes) {
+    special_loop_faces.insert(hole.top_face_index);
+    special_loop_faces.insert(hole.bottom_face_index);
+  }
+  for (const GenericCylindricalBlindFeature& feature : feature_export.blind_features) {
+    special_loop_faces.insert(feature.support_face_index);
+  }
+
+  std::unordered_set<int> special_blind_cap_faces;
+  for (const GenericCylindricalBlindFeature& feature : feature_export.blind_features) {
+    special_blind_cap_faces.insert(feature.cap_face_index);
   }
 
   std::vector<int> face_ids;
@@ -9082,8 +9429,27 @@ bool write_step_file_generic_cylindrical_holes(
     }
 
     const ReconstructedFace& face = reconstruction.faces[face_index];
-    if (!special_cap_faces.contains(static_cast<int>(face_index))) {
-      const StepPlaneSurface& plane = get_face_plane(static_cast<int>(face_index));
+    const int face_index_int = static_cast<int>(face_index);
+    const StepPlaneSurface& plane = get_face_plane(face_index_int);
+    if (special_blind_cap_faces.contains(face_index_int)) {
+      const auto cap_ref = blind_cap_face_refs.find(face_index_int);
+      if (cap_ref == blind_cap_face_refs.end()) {
+        return false;
+      }
+      const StepCylinderBundle& bundle = blind_bundles[cap_ref->second.feature_index];
+      const int edge_curve_id = cap_ref->second.use_top_edge ? bundle.top_edge_curve : bundle.bottom_edge_curve;
+      const bool same_orientation = cap_ref->second.area > 0.0;
+      const int oriented_edge =
+          step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
+                   std::string(same_orientation ? ".T." : ".F.") + ")");
+      const int edge_loop = step.add("EDGE_LOOP('',(" + step.ref(oriented_edge) + "))");
+      const int outer_bound = step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)");
+      face_ids.push_back(
+          step.add("ADVANCED_FACE('',(" + step.ref(outer_bound) + ")," + step.ref(plane.plane_id) + ",.T.)"));
+      continue;
+    }
+
+    if (!special_loop_faces.contains(face_index_int)) {
       std::vector<int> bound_ids;
       bound_ids.reserve(face.loops.size());
       for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
@@ -9107,7 +9473,6 @@ bool write_step_file_generic_cylindrical_holes(
       continue;
     }
 
-    const StepPlaneSurface& plane = get_face_plane(static_cast<int>(face_index));
     const std::vector<double> loop_areas =
         projected_face_loop_areas(face, reconstruction.vertices, plane.basis);
     const std::optional<std::size_t> outer_loop_index = outer_loop_index_from_areas(loop_areas);
@@ -9118,11 +9483,29 @@ bool write_step_file_generic_cylindrical_holes(
     std::vector<int> bound_ids;
     bound_ids.reserve(face.loops.size());
     for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
-      const auto hole_ref = hole_loop_refs.find(make_loop_key(static_cast<int>(face_index), loop_index));
+      const auto hole_ref = hole_loop_refs.find(make_face_loop_key(face_index_int, loop_index));
       if (hole_ref != hole_loop_refs.end()) {
         const StepCylinderBundle& bundle = hole_bundles[hole_ref->second.hole_index];
         const int edge_curve_id = hole_ref->second.is_top ? bundle.top_edge_curve : bundle.bottom_edge_curve;
         const bool same_orientation = hole_ref->second.area > 0.0;
+        const int oriented_edge =
+            step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
+                     std::string(same_orientation ? ".T." : ".F.") + ")");
+        const int edge_loop = step.add("EDGE_LOOP('',(" + step.ref(oriented_edge) + "))");
+        if (loop_index == *outer_loop_index) {
+          bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
+        } else {
+          bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
+        }
+        continue;
+      }
+
+      const auto blind_ref = blind_support_loop_refs.find(make_face_loop_key(face_index_int, loop_index));
+      if (blind_ref != blind_support_loop_refs.end()) {
+        const StepCylinderBundle& bundle = blind_bundles[blind_ref->second.feature_index];
+        const int edge_curve_id =
+            blind_ref->second.use_top_edge ? bundle.top_edge_curve : bundle.bottom_edge_curve;
+        const bool same_orientation = blind_ref->second.area > 0.0;
         const int oriented_edge =
             step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
                      std::string(same_orientation ? ".T." : ".F.") + ")");
@@ -9155,6 +9538,9 @@ bool write_step_file_generic_cylindrical_holes(
   }
 
   for (const StepCylinderBundle& bundle : hole_bundles) {
+    face_ids.push_back(bundle.lateral_face);
+  }
+  for (const StepCylinderBundle& bundle : blind_bundles) {
     face_ids.push_back(bundle.lateral_face);
   }
 
@@ -9259,10 +9645,12 @@ bool write_step_file(const std::filesystem::path& path,
     return write_step_file_prismatic_multi_counterbore(path, reconstruction, *multi_counterbore);
   }
 
-  if (const std::optional<GenericCylindricalThroughHoleExport> generic_holes =
-          detect_generic_cylindrical_through_hole_export(reconstruction);
-      generic_holes.has_value()) {
-    return write_step_file_generic_cylindrical_holes(path, reconstruction, *generic_holes);
+  if (const std::optional<GenericCylindricalFeatureExport> generic_features =
+          merge_generic_cylindrical_feature_exports(
+              detect_generic_cylindrical_through_hole_export(reconstruction),
+              detect_generic_cylindrical_blind_feature_export(reconstruction));
+      generic_features.has_value()) {
+    return write_step_file_generic_cylindrical_features(path, reconstruction, *generic_features);
   }
 
   if (const std::optional<SimplePrismaticMultiBoreExport> multi_bore =
