@@ -152,7 +152,7 @@ outputs under `tests/golden/`. It also includes a more complex bridge example un
 The test suite also generates a deterministic prismatic corpus at runtime, covering stepped
 blocks, L-brackets, channels, disconnected box assemblies, cross-shaped solids, multi-item
 3MF box assemblies, and prismatic blocks with analytic cylindrical through-bores, including
-rotated off-axis and varied aspect-ratio cases.
+rotated off-axis and varied aspect-ratio cases, plus blind cylindrical pockets.
 
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
 with upstream STL and 3MF models. Those smoke tests intentionally keep separate expectation
