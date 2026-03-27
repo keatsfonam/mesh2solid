@@ -493,6 +493,7 @@ struct GenericSmoothExtrudedBand {
   std::vector<Vec2> top_profile_points;
   std::vector<Vec2> bottom_profile_points;
   std::vector<int> side_face_indices;
+  bool prefer_cylindrical_surface {};
 };
 
 struct GenericSmoothExtrudedBandExport {
@@ -685,6 +686,313 @@ std::vector<Vec2> resample_polyline_2d(const std::vector<Vec2>& points, std::siz
     });
   }
   return resampled;
+}
+
+double polyline_line_fit_error_2d(const std::vector<Vec2>& points) {
+  if (points.size() < 2) {
+    return std::numeric_limits<double>::infinity();
+  }
+  double max_error = 0.0;
+  for (const Vec2& point : points) {
+    max_error = std::max(max_error, point_line_distance_2d(point, points.front(), points.back()));
+  }
+  return max_error;
+}
+
+std::vector<Vec2> build_smooth_band_profile_points(const std::vector<Vec2>& points) {
+  if (points.size() <= 3) {
+    return points;
+  }
+  const std::size_t target_count =
+      std::max<std::size_t>(points.size() <= 18 ? points.size() : 8,
+                            std::min<std::size_t>(18, points.size()));
+  return smooth_profile_points(resample_polyline_2d(points, target_count));
+}
+
+struct CircularBandSpanCandidate {
+  std::size_t start_index {};
+  std::size_t end_index {};
+  double sweep_degrees {};
+  double max_error {};
+};
+
+std::vector<CircularBandSpanCandidate> detect_circular_band_spans(const std::vector<Vec2>& top_profile,
+                                                                  const std::vector<Vec2>& bottom_profile) {
+  if (top_profile.size() != bottom_profile.size() || top_profile.size() < 9) {
+    return {};
+  }
+
+  std::vector<CircularBandSpanCandidate> candidates;
+  const std::size_t min_points = 9;
+  const std::size_t max_points = 60;
+  for (std::size_t start_index = 0; start_index + min_points <= top_profile.size(); ++start_index) {
+    const std::size_t end_limit = std::min<std::size_t>(top_profile.size(), start_index + max_points);
+    for (std::size_t end_index = start_index + min_points - 1; end_index < end_limit; ++end_index) {
+      const std::vector<Vec2> top_span(top_profile.begin() + static_cast<std::ptrdiff_t>(start_index),
+                                       top_profile.begin() + static_cast<std::ptrdiff_t>(end_index + 1));
+      const std::vector<Vec2> bottom_span(
+          bottom_profile.begin() + static_cast<std::ptrdiff_t>(start_index),
+          bottom_profile.begin() + static_cast<std::ptrdiff_t>(end_index + 1));
+      const std::optional<CircleFit2D> top_circle = fit_circle_2d(top_span);
+      const std::optional<CircleFit2D> bottom_circle = fit_circle_2d(bottom_span);
+      if (!top_circle.has_value() || !bottom_circle.has_value()) {
+        continue;
+      }
+
+      const double average_radius = 0.5 * (top_circle->radius + bottom_circle->radius);
+      if (!std::isfinite(average_radius) || average_radius <= 1e-6) {
+        continue;
+      }
+
+      const double tolerance = std::max(average_radius * 0.03, 0.08);
+      if (std::abs(top_circle->radius - bottom_circle->radius) > tolerance ||
+          !circle_fit_centers_coincident(*top_circle, *bottom_circle, tolerance) ||
+          std::max(top_circle->max_error, bottom_circle->max_error) > tolerance) {
+        continue;
+      }
+
+      const Vec2 start_radial {top_span.front().x - top_circle->center.x,
+                               top_span.front().y - top_circle->center.y};
+      const Vec2 end_radial {top_span.back().x - top_circle->center.x,
+                             top_span.back().y - top_circle->center.y};
+      const double start_length = std::sqrt(start_radial.x * start_radial.x +
+                                            start_radial.y * start_radial.y);
+      const double end_length = std::sqrt(end_radial.x * end_radial.x +
+                                          end_radial.y * end_radial.y);
+      if (start_length <= 1e-9 || end_length <= 1e-9) {
+        continue;
+      }
+
+      const double sweep_radians =
+          std::acos(clamp((start_radial.x * end_radial.x + start_radial.y * end_radial.y) /
+                              (start_length * end_length),
+                          -1.0,
+                          1.0));
+      const double sweep_degrees = sweep_radians * 180.0 / kPi;
+      if (!std::isfinite(sweep_degrees) || sweep_degrees < 20.0 || sweep_degrees > 170.0) {
+        continue;
+      }
+
+      const double line_error =
+          std::max(polyline_line_fit_error_2d(top_span), polyline_line_fit_error_2d(bottom_span));
+      const double circle_error = std::max(top_circle->max_error, bottom_circle->max_error);
+      if (line_error < circle_error * 1.2) {
+        continue;
+      }
+
+      candidates.push_back(
+          CircularBandSpanCandidate {start_index, end_index, sweep_degrees, circle_error});
+    }
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const CircularBandSpanCandidate& lhs, const CircularBandSpanCandidate& rhs) {
+              const std::size_t lhs_span = lhs.end_index - lhs.start_index;
+              const std::size_t rhs_span = rhs.end_index - rhs.start_index;
+              if (lhs_span != rhs_span) {
+                return lhs_span > rhs_span;
+              }
+              if (lhs.sweep_degrees != rhs.sweep_degrees) {
+                return lhs.sweep_degrees > rhs.sweep_degrees;
+              }
+              return lhs.max_error < rhs.max_error;
+            });
+
+  std::vector<CircularBandSpanCandidate> selected;
+  for (const CircularBandSpanCandidate& candidate : candidates) {
+    bool overlaps = false;
+    for (const CircularBandSpanCandidate& existing : selected) {
+      if (!(candidate.end_index < existing.start_index || candidate.start_index > existing.end_index)) {
+        overlaps = true;
+        break;
+      }
+    }
+    if (!overlaps) {
+      selected.push_back(candidate);
+    }
+  }
+
+  std::sort(selected.begin(),
+            selected.end(),
+            [](const CircularBandSpanCandidate& lhs, const CircularBandSpanCandidate& rhs) {
+              return lhs.start_index < rhs.start_index;
+            });
+  return selected;
+}
+
+std::optional<GenericSmoothExtrudedBand> make_generic_smooth_band_from_chains(
+    const ReconstructionResult& reconstruction,
+    int top_face_index,
+    std::size_t top_loop_index,
+    int bottom_face_index,
+    std::size_t bottom_loop_index,
+    const std::vector<int>& top_chain,
+    const std::vector<int>& bottom_chain,
+    const Vec3& axis,
+    const PlaneBasis& axis_basis,
+    double top_plane,
+    double bottom_plane,
+    const std::vector<int>& side_face_indices,
+    bool preserve_profile_points = false,
+    bool prefer_cylindrical_surface = false) {
+  if (top_chain.size() < 2 || bottom_chain.size() < 2) {
+    return std::nullopt;
+  }
+
+  const std::vector<Vec2> top_profile = project_chain_to_basis(top_chain, reconstruction.vertices, axis_basis);
+  const std::vector<Vec2> bottom_profile =
+      project_chain_to_basis(bottom_chain, reconstruction.vertices, axis_basis);
+  if (top_profile.size() != bottom_profile.size()) {
+    return std::nullopt;
+  }
+
+  const std::optional<LoopSubsequenceMatch> top_match =
+      find_loop_subsequence(reconstruction.faces[top_face_index].loops[top_loop_index], top_chain);
+  const std::optional<LoopSubsequenceMatch> bottom_match =
+      find_loop_subsequence(reconstruction.faces[bottom_face_index].loops[bottom_loop_index], bottom_chain);
+  if (!top_match.has_value() || !bottom_match.has_value()) {
+    return std::nullopt;
+  }
+
+  GenericSmoothExtrudedBand band;
+  band.top_face_index = top_face_index;
+  band.bottom_face_index = bottom_face_index;
+  band.top_loop_index = top_loop_index;
+  band.bottom_loop_index = bottom_loop_index;
+  band.top_loop_start = top_match->start;
+  band.top_loop_span = top_match->span;
+  band.top_forward = top_match->forward;
+  band.bottom_loop_start = bottom_match->start;
+  band.bottom_loop_span = bottom_match->span;
+  band.bottom_forward = bottom_match->forward;
+  band.axis = axis;
+  band.basis = axis_basis;
+  band.top_plane = top_plane;
+  band.bottom_plane = bottom_plane;
+  band.top_profile_points =
+      preserve_profile_points ? top_profile : build_smooth_band_profile_points(top_profile);
+  band.bottom_profile_points =
+      preserve_profile_points ? bottom_profile : build_smooth_band_profile_points(bottom_profile);
+  band.side_face_indices = side_face_indices;
+  band.prefer_cylindrical_surface = prefer_cylindrical_surface;
+  std::sort(band.side_face_indices.begin(), band.side_face_indices.end());
+  band.side_face_indices.erase(std::unique(band.side_face_indices.begin(), band.side_face_indices.end()),
+                               band.side_face_indices.end());
+  return band;
+}
+
+std::vector<GenericSmoothExtrudedBand> subdivide_generic_smooth_band_candidate(
+    const ReconstructionResult& reconstruction,
+    int top_face_index,
+    std::size_t top_loop_index,
+    int bottom_face_index,
+    std::size_t bottom_loop_index,
+    const std::vector<int>& top_chain,
+    const std::vector<int>& bottom_chain,
+    const Vec3& axis,
+    const PlaneBasis& axis_basis,
+    double top_plane,
+    double bottom_plane,
+    const std::vector<int>& side_face_indices) {
+  const std::vector<Vec2> top_profile = project_chain_to_basis(top_chain, reconstruction.vertices, axis_basis);
+  const std::vector<Vec2> bottom_profile =
+      project_chain_to_basis(bottom_chain, reconstruction.vertices, axis_basis);
+  if (top_profile.size() != bottom_profile.size() || top_profile.size() < 2) {
+    return {};
+  }
+
+  const std::vector<CircularBandSpanCandidate> circular_spans =
+      detect_circular_band_spans(top_profile, bottom_profile);
+  if (circular_spans.empty()) {
+    if (const std::optional<GenericSmoothExtrudedBand> band = make_generic_smooth_band_from_chains(
+            reconstruction,
+            top_face_index,
+            top_loop_index,
+            bottom_face_index,
+            bottom_loop_index,
+            top_chain,
+            bottom_chain,
+            axis,
+            axis_basis,
+            top_plane,
+            bottom_plane,
+            side_face_indices);
+        band.has_value()) {
+      return {*band};
+    }
+    return {};
+  }
+
+  std::vector<std::pair<std::size_t, std::size_t>> ranges;
+  std::size_t cursor = 0;
+  for (const CircularBandSpanCandidate& span : circular_spans) {
+    if (span.start_index > cursor) {
+      ranges.emplace_back(cursor, span.start_index);
+    }
+    ranges.emplace_back(span.start_index, span.end_index);
+    cursor = span.end_index;
+  }
+  if (cursor + 1 < top_chain.size()) {
+    ranges.emplace_back(cursor, top_chain.size() - 1);
+  }
+
+  std::vector<GenericSmoothExtrudedBand> bands;
+  bands.reserve(ranges.size());
+  for (const auto& [start_index, end_index] : ranges) {
+    if (end_index <= start_index || end_index >= top_chain.size() || end_index >= bottom_chain.size()) {
+      continue;
+    }
+    const std::vector<int> top_subchain(top_chain.begin() + static_cast<std::ptrdiff_t>(start_index),
+                                        top_chain.begin() + static_cast<std::ptrdiff_t>(end_index + 1));
+    const std::vector<int> bottom_subchain(
+        bottom_chain.begin() + static_cast<std::ptrdiff_t>(start_index),
+        bottom_chain.begin() + static_cast<std::ptrdiff_t>(end_index + 1));
+    const bool preserve_profile_points = std::any_of(
+        circular_spans.begin(),
+        circular_spans.end(),
+        [&](const CircularBandSpanCandidate& span) {
+          return span.start_index == start_index && span.end_index == end_index;
+        });
+    if (const std::optional<GenericSmoothExtrudedBand> band = make_generic_smooth_band_from_chains(
+            reconstruction,
+            top_face_index,
+            top_loop_index,
+            bottom_face_index,
+            bottom_loop_index,
+            top_subchain,
+            bottom_subchain,
+            axis,
+            axis_basis,
+            top_plane,
+            bottom_plane,
+            side_face_indices,
+            preserve_profile_points,
+            preserve_profile_points);
+        band.has_value()) {
+      bands.push_back(*band);
+    }
+  }
+
+  if (bands.empty()) {
+    if (const std::optional<GenericSmoothExtrudedBand> band = make_generic_smooth_band_from_chains(
+            reconstruction,
+            top_face_index,
+            top_loop_index,
+            bottom_face_index,
+            bottom_loop_index,
+            top_chain,
+            bottom_chain,
+            axis,
+            axis_basis,
+            top_plane,
+            bottom_plane,
+            side_face_indices);
+        band.has_value()) {
+      return {*band};
+    }
+  }
+  return bands;
 }
 
 std::optional<std::size_t> outer_loop_index_from_areas(const std::vector<double>& areas);
@@ -4735,34 +5043,20 @@ std::optional<GenericSmoothExtrudedBandExport> detect_generic_smooth_extruded_ba
         continue;
       }
 
-      const std::optional<LoopSubsequenceMatch> top_match =
-          find_loop_subsequence(top_face.loops[top_loop_ref->second], top_chain);
-      const std::optional<LoopSubsequenceMatch> bottom_match =
-          find_loop_subsequence(bottom_face.loops[bottom_loop_ref->second], bottom_chain);
-      if (!top_match.has_value() || !bottom_match.has_value()) {
-        continue;
-      }
-
-      GenericSmoothExtrudedBand band;
-      band.top_face_index = top_loop_ref->first;
-      band.bottom_face_index = bottom_loop_ref->first;
-      band.top_loop_index = top_loop_ref->second;
-      band.bottom_loop_index = bottom_loop_ref->second;
-      band.top_loop_start = top_match->start;
-      band.top_loop_span = top_match->span;
-      band.top_forward = top_match->forward;
-      band.bottom_loop_start = bottom_match->start;
-      band.bottom_loop_span = bottom_match->span;
-      band.bottom_forward = bottom_match->forward;
-      band.axis = axis;
-      band.basis = axis_basis;
-      band.top_plane = static_cast<double>(top_plane_key) / 1000.0;
-      band.bottom_plane = static_cast<double>(bottom_plane_key) / 1000.0;
-      band.top_profile_points = smooth_profile_points(normalized_top);
-      band.bottom_profile_points = smooth_profile_points(normalized_bottom);
-      band.side_face_indices = component;
-      std::sort(band.side_face_indices.begin(), band.side_face_indices.end());
-      candidates.push_back(std::move(band));
+      std::vector<GenericSmoothExtrudedBand> bands = subdivide_generic_smooth_band_candidate(
+          reconstruction,
+          top_loop_ref->first,
+          top_loop_ref->second,
+          bottom_loop_ref->first,
+          bottom_loop_ref->second,
+          top_chain,
+          bottom_chain,
+          axis,
+          axis_basis,
+          static_cast<double>(top_plane_key) / 1000.0,
+          static_cast<double>(bottom_plane_key) / 1000.0,
+          component);
+      candidates.insert(candidates.end(), bands.begin(), bands.end());
     }
   }
 
@@ -4908,34 +5202,20 @@ std::optional<GenericSmoothExtrudedBandExport> detect_generic_smooth_extruded_ba
       continue;
     }
 
-    const std::optional<LoopSubsequenceMatch> top_match =
-        find_loop_subsequence(top_face.loops[top_loop_ref.second], top_chain);
-    const std::optional<LoopSubsequenceMatch> bottom_match =
-        find_loop_subsequence(bottom_face.loops[bottom_loop_ref.second], bottom_chain);
-    if (!top_match.has_value() || !bottom_match.has_value()) {
-      continue;
-    }
-
-    GenericSmoothExtrudedBand band;
-    band.top_face_index = top_loop_ref.first;
-    band.bottom_face_index = bottom_loop_ref.first;
-    band.top_loop_index = top_loop_ref.second;
-    band.bottom_loop_index = bottom_loop_ref.second;
-    band.top_loop_start = top_match->start;
-    band.top_loop_span = top_match->span;
-    band.top_forward = top_match->forward;
-    band.bottom_loop_start = bottom_match->start;
-    band.bottom_loop_span = bottom_match->span;
-    band.bottom_forward = bottom_match->forward;
-    band.axis = axis;
-    band.basis = axis_basis;
-    band.top_plane = dot(top_face.fit.centroid, axis);
-    band.bottom_plane = dot(bottom_face.fit.centroid, axis);
-    band.top_profile_points = smooth_profile_points(normalized_top);
-    band.bottom_profile_points = smooth_profile_points(normalized_bottom);
-    band.side_face_indices = component;
-    std::sort(band.side_face_indices.begin(), band.side_face_indices.end());
-    candidates.push_back(std::move(band));
+    std::vector<GenericSmoothExtrudedBand> bands = subdivide_generic_smooth_band_candidate(
+        reconstruction,
+        top_loop_ref.first,
+        top_loop_ref.second,
+        bottom_loop_ref.first,
+        bottom_loop_ref.second,
+        top_chain,
+        bottom_chain,
+        axis,
+        axis_basis,
+        dot(top_face.fit.centroid, axis),
+        dot(bottom_face.fit.centroid, axis),
+        component);
+    candidates.insert(candidates.end(), bands.begin(), bands.end());
   }
 
   if (candidates.empty()) {
@@ -4993,6 +5273,9 @@ std::optional<GenericCylindricalFeatureExport> merge_generic_cylindrical_feature
   GenericCylindricalFeatureExport merged;
   std::unordered_set<std::uint64_t> used_loops;
   std::unordered_set<int> used_side_faces;
+  std::set<std::pair<std::uint64_t, std::uint64_t>> used_smooth_loop_pairs;
+  std::set<std::tuple<std::uint64_t, std::uint64_t, std::size_t, std::size_t, std::size_t, std::size_t>>
+      used_smooth_band_spans;
 
   if (holes.has_value()) {
     merged.holes = holes->holes;
@@ -5034,23 +5317,25 @@ std::optional<GenericCylindricalFeatureExport> merge_generic_cylindrical_feature
     for (const GenericSmoothExtrudedBand& band : smooth_bands->bands) {
       const std::uint64_t top_key = make_face_loop_key(band.top_face_index, band.top_loop_index);
       const std::uint64_t bottom_key = make_face_loop_key(band.bottom_face_index, band.bottom_loop_index);
-      if (used_loops.contains(top_key) || used_loops.contains(bottom_key)) {
+      const std::pair<std::uint64_t, std::uint64_t> loop_pair {top_key, bottom_key};
+      const auto band_span_key = std::make_tuple(top_key,
+                                                 bottom_key,
+                                                 band.top_loop_start,
+                                                 band.top_loop_span,
+                                                 band.bottom_loop_start,
+                                                 band.bottom_loop_span);
+      if (used_smooth_band_spans.contains(band_span_key)) {
         continue;
       }
-
-      bool side_conflict = false;
-      for (int face_index : band.side_face_indices) {
-        if (used_side_faces.contains(face_index)) {
-          side_conflict = true;
-          break;
-        }
-      }
-      if (side_conflict) {
+      const bool same_smooth_pair = used_smooth_loop_pairs.contains(loop_pair);
+      if (!same_smooth_pair && (used_loops.contains(top_key) || used_loops.contains(bottom_key))) {
         continue;
       }
 
       used_loops.insert(top_key);
       used_loops.insert(bottom_key);
+      used_smooth_loop_pairs.insert(loop_pair);
+      used_smooth_band_spans.insert(band_span_key);
       used_side_faces.insert(band.side_face_indices.begin(), band.side_face_indices.end());
       merged.smooth_bands.push_back(band);
     }
@@ -5133,7 +5418,8 @@ std::optional<StepSmoothBandBundle> add_step_cylindrical_band_bundle(
     return std::nullopt;
   }
 
-  const double radius_tolerance = std::max(radius * 0.025, 1e-4);
+  const double radius_tolerance =
+      band.prefer_cylindrical_surface ? std::max(radius * 0.03, 0.08) : std::max(radius * 0.025, 1e-4);
   if (std::abs(top_circle->radius - bottom_circle->radius) > radius_tolerance ||
       top_circle->max_error > radius_tolerance ||
       bottom_circle->max_error > radius_tolerance ||
@@ -10617,11 +10903,34 @@ bool write_step_file_generic_cylindrical_features(
     return step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
   };
 
-  auto add_loop_with_band_replacement = [&](const std::vector<int>& loop,
-                                            const LoopSubsequenceMatch& match,
-                                            int edge_curve_id) -> int {
-    if (loop.size() < 2 || match.span == 0 || match.span >= loop.size()) {
+  struct LoopCurveReplacement {
+    LoopSubsequenceMatch match;
+    int edge_curve_id {};
+  };
+
+  auto add_loop_with_replacements = [&](const std::vector<int>& loop,
+                                        const std::vector<LoopCurveReplacement>& replacements) -> int {
+    if (loop.size() < 2 || replacements.empty()) {
       return add_line_loop(loop);
+    }
+
+    std::unordered_map<std::size_t, std::size_t> replacement_by_start;
+    std::vector<bool> covered(loop.size(), false);
+    for (std::size_t replacement_index = 0; replacement_index < replacements.size(); ++replacement_index) {
+      const LoopCurveReplacement& replacement = replacements[replacement_index];
+      if (replacement.match.span == 0 || replacement.match.span >= loop.size()) {
+        return add_line_loop(loop);
+      }
+      if (!replacement_by_start.emplace(replacement.match.start, replacement_index).second) {
+        return add_line_loop(loop);
+      }
+      for (std::size_t offset = 0; offset < replacement.match.span; ++offset) {
+        const std::size_t edge_slot = (replacement.match.start + offset) % loop.size();
+        if (covered[edge_slot]) {
+          return add_line_loop(loop);
+        }
+        covered[edge_slot] = true;
+      }
     }
 
     std::ostringstream edge_refs;
@@ -10636,10 +10945,30 @@ bool write_step_file_generic_cylindrical_features(
                    std::string(same_orientation ? ".T." : ".F.") + ")"));
     };
 
-    append_oriented_edge(edge_curve_id, match.forward);
-    std::size_t processed_edges = match.span;
-    std::size_t edge_index = (match.start + match.span) % loop.size();
+    std::size_t edge_index = 0;
+    bool found_start = false;
+    for (std::size_t candidate = 0; candidate < loop.size(); ++candidate) {
+      if (!covered[candidate]) {
+        edge_index = candidate;
+        found_start = true;
+        break;
+      }
+    }
+    if (!found_start) {
+      edge_index = replacements.front().match.start % loop.size();
+    }
+
+    std::size_t processed_edges = 0;
     while (processed_edges < loop.size()) {
+      const auto replacement_found = replacement_by_start.find(edge_index);
+      if (replacement_found != replacement_by_start.end()) {
+        const LoopCurveReplacement& replacement = replacements[replacement_found->second];
+        append_oriented_edge(replacement.edge_curve_id, replacement.match.forward);
+        edge_index = (edge_index + replacement.match.span) % loop.size();
+        processed_edges += replacement.match.span;
+        continue;
+      }
+
       const int from = loop[edge_index];
       const int to = loop[(edge_index + 1) % loop.size()];
       const int line_edge_curve_id = get_line_edge_curve_id(from, to);
@@ -10689,7 +11018,7 @@ bool write_step_file_generic_cylindrical_features(
   std::unordered_map<std::uint64_t, HoleLoopRef> hole_loop_refs;
   std::unordered_map<std::uint64_t, BlindSupportLoopRef> blind_support_loop_refs;
   std::unordered_map<int, BlindCapFaceRef> blind_cap_face_refs;
-  std::unordered_map<std::uint64_t, SmoothBandLoopRef> smooth_band_loop_refs;
+  std::unordered_map<std::uint64_t, std::vector<SmoothBandLoopRef>> smooth_band_loop_refs;
   std::vector<StepCylinderBundle> hole_bundles;
   hole_bundles.reserve(feature_export.holes.size());
   for (std::size_t hole_index = 0; hole_index < feature_export.holes.size(); ++hole_index) {
@@ -10730,10 +11059,10 @@ bool write_step_file_generic_cylindrical_features(
   for (std::size_t band_index = 0; band_index < feature_export.smooth_bands.size(); ++band_index) {
     const GenericSmoothExtrudedBand& band = feature_export.smooth_bands[band_index];
     smooth_band_bundles.push_back(add_step_smooth_band_bundle(step, band));
-    smooth_band_loop_refs.emplace(make_face_loop_key(band.top_face_index, band.top_loop_index),
-                                  SmoothBandLoopRef {band_index, true});
-    smooth_band_loop_refs.emplace(make_face_loop_key(band.bottom_face_index, band.bottom_loop_index),
-                                  SmoothBandLoopRef {band_index, false});
+    smooth_band_loop_refs[make_face_loop_key(band.top_face_index, band.top_loop_index)].push_back(
+        SmoothBandLoopRef {band_index, true});
+    smooth_band_loop_refs[make_face_loop_key(band.bottom_face_index, band.bottom_loop_index)].push_back(
+        SmoothBandLoopRef {band_index, false});
     omitted_side_faces.insert(band.side_face_indices.begin(), band.side_face_indices.end());
   }
 
@@ -10820,16 +11149,21 @@ bool write_step_file_generic_cylindrical_features(
       const auto smooth_band_ref =
           smooth_band_loop_refs.find(make_face_loop_key(face_index_int, loop_index));
       if (smooth_band_ref != smooth_band_loop_refs.end()) {
-        const GenericSmoothExtrudedBand& band = feature_export.smooth_bands[smooth_band_ref->second.band_index];
-        const StepSmoothBandBundle& bundle = smooth_band_bundles[smooth_band_ref->second.band_index];
-        const LoopSubsequenceMatch match {
-            smooth_band_ref->second.is_top ? band.top_loop_start : band.bottom_loop_start,
-            smooth_band_ref->second.is_top ? band.top_loop_span : band.bottom_loop_span,
-            smooth_band_ref->second.is_top ? band.top_forward : band.bottom_forward,
-        };
-        const int edge_curve_id =
-            smooth_band_ref->second.is_top ? bundle.top_edge_curve : bundle.bottom_edge_curve;
-        const int edge_loop = add_loop_with_band_replacement(face.loops[loop_index], match, edge_curve_id);
+        std::vector<LoopCurveReplacement> replacements;
+        replacements.reserve(smooth_band_ref->second.size());
+        for (const SmoothBandLoopRef& loop_ref : smooth_band_ref->second) {
+          const GenericSmoothExtrudedBand& band = feature_export.smooth_bands[loop_ref.band_index];
+          const StepSmoothBandBundle& bundle = smooth_band_bundles[loop_ref.band_index];
+          replacements.push_back(LoopCurveReplacement {
+              LoopSubsequenceMatch {
+                  loop_ref.is_top ? band.top_loop_start : band.bottom_loop_start,
+                  loop_ref.is_top ? band.top_loop_span : band.bottom_loop_span,
+                  loop_ref.is_top ? band.top_forward : band.bottom_forward,
+              },
+              loop_ref.is_top ? bundle.top_edge_curve : bundle.bottom_edge_curve,
+          });
+        }
+        const int edge_loop = add_loop_with_replacements(face.loops[loop_index], replacements);
         if (loop_index == *outer_loop_index) {
           bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
         } else {

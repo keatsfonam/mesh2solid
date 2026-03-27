@@ -2,6 +2,7 @@ import json
 import math
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -2228,10 +2229,17 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
             self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
             self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
-            self.assertGreaterEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 2)
-            self.assertGreaterEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 1)
-            self.assertGreaterEqual(step_text.count("CYLINDRICAL_SURFACE"), 2)
-            self.assertLessEqual(step_text.count("ADVANCED_FACE"), 60)
+            cylinder_radii = [
+                float(match)
+                for match in re.findall(
+                    r"CYLINDRICAL_SURFACE\('',#[0-9]+,([0-9.E+-]+)\);", step_text
+                )
+            ]
+            self.assertEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 0)
+            self.assertEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 0)
+            self.assertGreaterEqual(step_text.count("CYLINDRICAL_SURFACE"), 3)
+            self.assertGreater(max(cylinder_radii), 3.20)
+            self.assertLessEqual(step_text.count("ADVANCED_FACE"), 56)
             self.assertLess(step_text.count("ADVANCED_FACE"), report["reconstruction"]["face_count"])
 
     def test_xy_nema_bracket_benchmark_upgrades_multiple_holes_to_cylinders(self):
