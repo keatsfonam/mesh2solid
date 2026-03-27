@@ -153,7 +153,8 @@ The test suite also generates a deterministic prismatic corpus at runtime, cover
 blocks, L-brackets, channels, disconnected box assemblies, cross-shaped solids, multi-item
 3MF box assemblies, and prismatic blocks with analytic cylindrical through-bores, including
 rotated off-axis, off-center, repeated multi-bore mounting patterns, repeated multi-counterbore mounting patterns, and varied aspect-ratio cases, plus blind cylindrical pockets,
-blind counterbores, simple counterbores, cylindrical bosses/posts, and standoff-style tubular
+blind counterbores, simple counterbores, cylindrical bosses/posts, repeated multi-boss pads,
+and standoff-style tubular
 bosses with concentric through-holes, plus obround through-slots with analytic half-cylinders.
 
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus

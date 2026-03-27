@@ -970,6 +970,161 @@ def boss_mesh(
     return vertices, faces
 
 
+def block_with_two_bosses_mesh(
+    half_size=24.0,
+    radius=5.0,
+    offset=10.0,
+    height=18.0,
+    boss_height=8.0,
+    segments=16,
+):
+    if segments % 4 != 0:
+        raise ValueError("segments must be divisible by 4")
+
+    vertices = []
+    vertex_ids = {}
+    faces = []
+
+    def vertex_id(point):
+        key = tuple(round(value, 8) for value in point)
+        if key not in vertex_ids:
+            vertex_ids[key] = len(vertices)
+            vertices.append(tuple(float(value) for value in point))
+        return vertex_ids[key]
+
+    def add_strip(left_ids, right_ids, top=True):
+        for index in range(len(left_ids) - 1):
+            a0 = left_ids[index]
+            a1 = left_ids[index + 1]
+            b0 = right_ids[index]
+            b1 = right_ids[index + 1]
+            if top:
+                faces.append((a0, b0, b1))
+                faces.append((a0, b1, a1))
+            else:
+                faces.append((a0, b1, b0))
+                faces.append((a0, a1, b1))
+
+    half_step = segments // 4
+    right_half_angles = [
+        math.pi / 2.0 - math.pi * index / (2.0 * half_step)
+        for index in range(2 * half_step + 1)
+    ]
+    left_half_angles = [
+        math.pi / 2.0 + math.pi * index / (2.0 * half_step)
+        for index in range(2 * half_step + 1)
+    ]
+    full_angles = [2.0 * math.pi * index / segments for index in range(segments)]
+
+    def circle_ids(center_x, z, angles):
+        return [
+            vertex_id((center_x + radius * math.cos(angle), radius * math.sin(angle), z))
+            for angle in angles
+        ]
+
+    base_left_out = circle_ids(-offset, height, left_half_angles)
+    base_left_in = circle_ids(-offset, height, right_half_angles)
+    base_right_in = circle_ids(offset, height, left_half_angles)
+    base_right_out = circle_ids(offset, height, right_half_angles)
+
+    left_square_top = [
+        vertex_id((-half_size, radius * math.sin(angle), height)) for angle in left_half_angles
+    ]
+    right_square_top = [
+        vertex_id((half_size, radius * math.sin(angle), height)) for angle in right_half_angles
+    ]
+    left_square_bottom = [
+        vertex_id((-half_size, radius * math.sin(angle), 0.0)) for angle in left_half_angles
+    ]
+    right_square_bottom = [
+        vertex_id((half_size, radius * math.sin(angle), 0.0)) for angle in right_half_angles
+    ]
+
+    top_lt = vertex_id((-half_size, half_size, height))
+    top_lm = vertex_id((-offset, half_size, height))
+    top_rm = vertex_id((offset, half_size, height))
+    top_rt = vertex_id((half_size, half_size, height))
+    top_rb = vertex_id((half_size, -half_size, height))
+    top_rmb = vertex_id((offset, -half_size, height))
+    top_lmb = vertex_id((-offset, -half_size, height))
+    top_lb = vertex_id((-half_size, -half_size, height))
+    bottom_lt = vertex_id((-half_size, half_size, 0.0))
+    bottom_lm = vertex_id((-offset, half_size, 0.0))
+    bottom_rm = vertex_id((offset, half_size, 0.0))
+    bottom_rt = vertex_id((half_size, half_size, 0.0))
+    bottom_rb = vertex_id((half_size, -half_size, 0.0))
+    bottom_rmb = vertex_id((offset, -half_size, 0.0))
+    bottom_lmb = vertex_id((-offset, -half_size, 0.0))
+    bottom_lb = vertex_id((-half_size, -half_size, 0.0))
+
+    faces.extend(
+        [
+            (top_lt, top_lm, left_square_top[0]),
+            (top_lm, base_left_in[0], left_square_top[0]),
+            (top_lm, top_rm, base_right_in[0]),
+            (top_lm, base_right_in[0], base_left_in[0]),
+            (top_rm, top_rt, right_square_top[0]),
+            (top_rm, right_square_top[0], base_right_in[0]),
+            (left_square_top[-1], top_lmb, top_lb),
+            (left_square_top[-1], base_left_in[-1], top_lmb),
+            (base_left_in[-1], base_right_in[-1], top_rmb),
+            (base_left_in[-1], top_rmb, top_lmb),
+            (base_right_in[-1], right_square_top[-1], top_rb),
+            (base_right_in[-1], top_rb, top_rmb),
+        ]
+    )
+    add_strip(left_square_top, base_left_out, top=True)
+    add_strip(base_left_in, base_right_in, top=True)
+    add_strip(base_right_out, right_square_top, top=True)
+
+    faces.extend(
+        [
+            (bottom_lt, bottom_lm, bottom_rm),
+            (bottom_lt, bottom_rm, bottom_rt),
+            (bottom_lb, bottom_lmb, bottom_rmb),
+            (bottom_lb, bottom_rmb, bottom_rb),
+            (bottom_lt, bottom_lb, bottom_lmb),
+            (bottom_lt, bottom_lmb, bottom_lm),
+            (bottom_lm, bottom_lmb, bottom_rmb),
+            (bottom_lm, bottom_rmb, bottom_rm),
+            (bottom_rm, bottom_rmb, bottom_rb),
+            (bottom_rm, bottom_rb, bottom_rt),
+        ]
+    )
+
+    left_face_bottom = [bottom_lt] + left_square_bottom + [bottom_lb]
+    left_face_top = [top_lt] + left_square_top + [top_lb]
+    add_strip(left_face_bottom, left_face_top, top=True)
+
+    right_face_bottom = [bottom_rt] + right_square_bottom + [bottom_rb]
+    right_face_top = [top_rt] + right_square_top + [top_rb]
+    add_strip(right_face_top, right_face_bottom, top=True)
+
+    front_bottom = [bottom_lt, bottom_lm, bottom_rm, bottom_rt]
+    front_top = [top_lt, top_lm, top_rm, top_rt]
+    add_strip(front_bottom, front_top, top=True)
+
+    back_bottom = [bottom_rb, bottom_rmb, bottom_lmb, bottom_lb]
+    back_top = [top_rb, top_rmb, top_lmb, top_lb]
+    add_strip(back_top, back_bottom, top=True)
+
+    base_left_circle = circle_ids(-offset, height, full_angles)
+    base_right_circle = circle_ids(offset, height, full_angles)
+    top_left_circle = circle_ids(-offset, height + boss_height, full_angles)
+    top_right_circle = circle_ids(offset, height + boss_height, full_angles)
+
+    for base_loop, top_loop in ((base_left_circle, top_left_circle), (base_right_circle, top_right_circle)):
+        top_center_x = sum(vertices[idx][0] for idx in top_loop) / len(top_loop)
+        top_center = vertex_id((top_center_x, 0.0, height + boss_height))
+        for index in range(segments):
+            next_index = (index + 1) % segments
+            faces.append((base_loop[index], top_loop[next_index], base_loop[next_index]))
+            faces.append((base_loop[index], top_loop[index], top_loop[next_index]))
+            faces.append((top_center, top_loop[index], top_loop[next_index]))
+
+    return vertices, faces
+
+
 def standoff_mesh(
     half_size=20.0,
     inner_radius=4.0,
@@ -1890,6 +2045,28 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(step_text.count("ADVANCED_FACE"), 8)
             self.assertEqual(step_text.count("PLANE("), 7)
             self.assertGreaterEqual(step_text.count("FACE_BOUND"), 2)
+
+    def test_prismatic_block_with_two_bosses_exports_clean_cylinders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "two_bosses.stl"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = block_with_two_bosses_mesh()
+            write_ascii_stl(mesh_path, vertices, faces)
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertNotIn("FACETED_BREP", step_text)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 2)
+            self.assertGreaterEqual(step_text.count("CIRCLE("), 8)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 10)
+            self.assertEqual(step_text.count("PLANE("), 8)
+            self.assertGreaterEqual(step_text.count("FACE_BOUND"), 4)
 
     def test_prismatic_block_with_standoff_exports_clean_cylinders(self):
         with tempfile.TemporaryDirectory() as tmp:
