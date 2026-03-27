@@ -212,33 +212,14 @@ bool write_step_file_generic_cylindrical_features(
           step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
                    std::string(same_orientation ? ".T." : ".F.") + ")");
       const int edge_loop = step.add("EDGE_LOOP('',(" + step.ref(oriented_edge) + "))");
-      const int outer_bound = step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)");
-      face_ids.push_back(step.add("ADVANCED_FACE('',(" + step.ref(outer_bound) + ")," +
-                                  step.ref(plane.plane_id) + ",.T.)"));
+      face_ids.push_back(add_step_planar_face_from_edge_loops(
+          step, plane.plane_id, std::vector<int> {edge_loop}));
       continue;
     }
 
     if (!special_loop_faces.contains(face_index_int)) {
-      std::vector<int> bound_ids;
-      bound_ids.reserve(face.loops.size());
-      for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
-        const int edge_loop = writer.add_line_loop(face.loops[loop_index]);
-        if (loop_index == 0) {
-          bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-        } else {
-          bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-        }
-      }
-
-      std::ostringstream bound_refs;
-      for (std::size_t index = 0; index < bound_ids.size(); ++index) {
-        if (index > 0) {
-          bound_refs << ",";
-        }
-        bound_refs << step.ref(bound_ids[index]);
-      }
-      face_ids.push_back(step.add("ADVANCED_FACE('',(" + bound_refs.str() + ")," +
-                                  step.ref(plane.plane_id) + ",.T.)"));
+      face_ids.push_back(
+          add_step_planar_face_from_loops(step, writer, plane.plane_id, face.loops));
       continue;
     }
 
@@ -249,8 +230,8 @@ bool write_step_file_generic_cylindrical_features(
       return false;
     }
 
-    std::vector<int> bound_ids;
-    bound_ids.reserve(face.loops.size());
+    std::vector<int> edge_loop_ids;
+    edge_loop_ids.reserve(face.loops.size());
     for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
       const auto smooth_band_ref =
           smooth_band_loop_refs.find(make_face_loop_key(face_index_int, loop_index));
@@ -270,11 +251,7 @@ bool write_step_file_generic_cylindrical_features(
           });
         }
         const int edge_loop = add_loop_with_replacements(face.loops[loop_index], replacements);
-        if (loop_index == *outer_loop_index) {
-          bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-        } else {
-          bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-        }
+        edge_loop_ids.push_back(edge_loop);
         continue;
       }
 
@@ -288,11 +265,7 @@ bool write_step_file_generic_cylindrical_features(
             step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
                      std::string(same_orientation ? ".T." : ".F.") + ")");
         const int edge_loop = step.add("EDGE_LOOP('',(" + step.ref(oriented_edge) + "))");
-        if (loop_index == *outer_loop_index) {
-          bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-        } else {
-          bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-        }
+        edge_loop_ids.push_back(edge_loop);
         continue;
       }
 
@@ -307,31 +280,15 @@ bool write_step_file_generic_cylindrical_features(
             step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
                      std::string(same_orientation ? ".T." : ".F.") + ")");
         const int edge_loop = step.add("EDGE_LOOP('',(" + step.ref(oriented_edge) + "))");
-        if (loop_index == *outer_loop_index) {
-          bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-        } else {
-          bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-        }
+        edge_loop_ids.push_back(edge_loop);
         continue;
       }
 
       const int edge_loop = writer.add_line_loop(face.loops[loop_index]);
-      if (loop_index == *outer_loop_index) {
-        bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-      } else {
-        bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-      }
+      edge_loop_ids.push_back(edge_loop);
     }
-
-    std::ostringstream bound_refs;
-    for (std::size_t index = 0; index < bound_ids.size(); ++index) {
-      if (index > 0) {
-        bound_refs << ",";
-      }
-      bound_refs << step.ref(bound_ids[index]);
-    }
-    face_ids.push_back(step.add("ADVANCED_FACE('',(" + bound_refs.str() + ")," +
-                                step.ref(plane.plane_id) + ",.T.)"));
+    face_ids.push_back(add_step_planar_face_from_edge_loops(
+        step, plane.plane_id, edge_loop_ids, *outer_loop_index));
   }
 
   for (const StepCylinderBundle& bundle : hole_bundles) {

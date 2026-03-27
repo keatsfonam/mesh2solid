@@ -361,30 +361,22 @@ bool write_step_file_prismatic_axial_through_features(
   }
 
   const int top_outer_loop_id = writer.add_line_loop(top_outer_loop);
-  std::vector<int> top_bound_ids;
-  top_bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(top_outer_loop_id) + ",.T.)"));
+  std::vector<int> top_edge_loops;
+  top_edge_loops.push_back(top_outer_loop_id);
   for (std::size_t index = 0; index < feature_export.features.size(); ++index) {
     const bool top_circle_forward = feature_export.features[index].top_inner_area > 0.0;
     const int top_inner_oriented =
         step.add("ORIENTED_EDGE('',*,*," + step.ref(bundles[index].top_edge_curve) + "," +
                  std::string(top_circle_forward ? ".T." : ".F.") + ")");
     const int top_inner_loop = step.add("EDGE_LOOP('',(" + step.ref(top_inner_oriented) + "))");
-    top_bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(top_inner_loop) + ",.T.)"));
+    top_edge_loops.push_back(top_inner_loop);
   }
-  std::ostringstream top_bound_refs;
-  for (std::size_t index = 0; index < top_bound_ids.size(); ++index) {
-    if (index > 0) {
-      top_bound_refs << ",";
-    }
-    top_bound_refs << step.ref(top_bound_ids[index]);
-  }
-  const int top_face = step.add("ADVANCED_FACE('',(" + top_bound_refs.str() + ")," +
-                                step.ref(top_plane.plane_id) + ",.T.)");
+  const int top_face =
+      add_step_planar_face_from_edge_loops(step, top_plane.plane_id, top_edge_loops);
 
   const int bottom_outer_loop_id = writer.add_line_loop(bottom_outer_loop);
-  std::vector<int> bottom_bound_ids;
-  bottom_bound_ids.push_back(
-      step.add("FACE_OUTER_BOUND(''," + step.ref(bottom_outer_loop_id) + ",.T.)"));
+  std::vector<int> bottom_edge_loops;
+  bottom_edge_loops.push_back(bottom_outer_loop_id);
   for (std::size_t index = 0; index < feature_export.features.size(); ++index) {
     const bool bottom_circle_forward = feature_export.features[index].bottom_inner_area > 0.0;
     const int bottom_inner_oriented =
@@ -392,17 +384,10 @@ bool write_step_file_prismatic_axial_through_features(
                  std::string(bottom_circle_forward ? ".T." : ".F.") + ")");
     const int bottom_inner_loop =
         step.add("EDGE_LOOP('',(" + step.ref(bottom_inner_oriented) + "))");
-    bottom_bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(bottom_inner_loop) + ",.T.)"));
+    bottom_edge_loops.push_back(bottom_inner_loop);
   }
-  std::ostringstream bottom_bound_refs;
-  for (std::size_t index = 0; index < bottom_bound_ids.size(); ++index) {
-    if (index > 0) {
-      bottom_bound_refs << ",";
-    }
-    bottom_bound_refs << step.ref(bottom_bound_ids[index]);
-  }
-  const int bottom_face = step.add("ADVANCED_FACE('',(" + bottom_bound_refs.str() + ")," +
-                                   step.ref(bottom_plane.plane_id) + ",.F.)");
+  const int bottom_face = add_step_planar_face_from_edge_loops(
+      step, bottom_plane.plane_id, bottom_edge_loops, 0, false);
 
   std::vector<int> side_face_ids;
   side_face_ids.reserve(feature_export.outer_face_indices.size());
@@ -423,26 +408,7 @@ bool write_step_file_prismatic_axial_through_features(
                                    step.ref(face_normal) + "," + step.ref(face_ref) + ")");
     const int plane = step.add("PLANE(''," + step.ref(face_axis) + ")");
 
-    std::vector<int> bound_ids;
-    bound_ids.reserve(face.loops.size());
-    for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
-      const int edge_loop = writer.add_line_loop(face.loops[loop_index]);
-      if (loop_index == 0) {
-        bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-      } else {
-        bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
-      }
-    }
-
-    std::ostringstream bound_refs;
-    for (std::size_t index = 0; index < bound_ids.size(); ++index) {
-      if (index > 0) {
-        bound_refs << ",";
-      }
-      bound_refs << step.ref(bound_ids[index]);
-    }
-    side_face_ids.push_back(
-        step.add("ADVANCED_FACE('',(" + bound_refs.str() + ")," + step.ref(plane) + ",.T.)"));
+    side_face_ids.push_back(add_step_planar_face_from_loops(step, writer, plane, face.loops));
   }
 
   std::ostringstream shell_faces;

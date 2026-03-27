@@ -104,3 +104,41 @@ class StepLineLoopWriter {
   std::vector<int> vertex_point_ids;
   std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_curve_ids;
 };
+
+int add_step_planar_face_from_edge_loops(StepBuilder& step,
+                                         int plane_id,
+                                         const std::vector<int>& edge_loop_ids,
+                                         std::size_t outer_loop_index = 0,
+                                         bool same_sense = true) {
+  std::vector<int> bound_ids;
+  bound_ids.reserve(edge_loop_ids.size());
+  for (std::size_t loop_index = 0; loop_index < edge_loop_ids.size(); ++loop_index) {
+    const std::string bound_prefix = loop_index == outer_loop_index ? "FACE_OUTER_BOUND" : "FACE_BOUND";
+    bound_ids.push_back(step.add(bound_prefix + "(''," + step.ref(edge_loop_ids[loop_index]) + ",.T.)"));
+  }
+
+  std::ostringstream bound_refs;
+  for (std::size_t index = 0; index < bound_ids.size(); ++index) {
+    if (index > 0) {
+      bound_refs << ",";
+    }
+    bound_refs << step.ref(bound_ids[index]);
+  }
+  return step.add("ADVANCED_FACE('',(" + bound_refs.str() + ")," + step.ref(plane_id) + "," +
+                  std::string(same_sense ? ".T." : ".F.") + ")");
+}
+
+int add_step_planar_face_from_loops(StepBuilder& step,
+                                    StepLineLoopWriter& writer,
+                                    int plane_id,
+                                    const std::vector<std::vector<int>>& loops,
+                                    std::size_t outer_loop_index = 0,
+                                    bool same_sense = true) {
+  std::vector<int> edge_loop_ids;
+  edge_loop_ids.reserve(loops.size());
+  for (const std::vector<int>& loop : loops) {
+    edge_loop_ids.push_back(writer.add_line_loop(loop));
+  }
+  return add_step_planar_face_from_edge_loops(
+      step, plane_id, edge_loop_ids, outer_loop_index, same_sense);
+}
