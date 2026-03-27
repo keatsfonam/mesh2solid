@@ -163,7 +163,7 @@ blocks, L-brackets, channels, disconnected box assemblies, cross-shaped solids, 
 rotated off-axis, off-center, repeated multi-bore mounting patterns, repeated multi-counterbore mounting patterns, repeated multi-countersink mounting patterns, and varied aspect-ratio cases, plus blind cylindrical pockets,
 blind counterbores, blind countersinks/conical seats, simple counterbores, simple countersinks/conical seats, cylindrical bosses/posts, repeated multi-boss pads,
 and standoff-style tubular
-bosses with concentric through-holes, plus repeated multi-blind-bore and repeated multi-blind-counterbore
+bosses with concentric through-holes, plus repeated multi-blind-bore, repeated multi-blind-counterbore, and repeated multi-blind-countersink
 pocket patterns, obround through-slots with analytic half-cylinders, and benchmark-derived
 planar bodies whose faceted circular through-holes are upgraded to analytic cylinders at STEP export,
 including bodies with multiple distinct cap-face pairs in the same part plus mixed blind cylindrical
