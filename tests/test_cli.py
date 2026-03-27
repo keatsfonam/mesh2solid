@@ -1288,6 +1288,78 @@ def blind_counterbore_mesh(
     return vertices, faces
 
 
+def blind_countersink_mesh(
+    half_size=20.0,
+    through_radius=4.0,
+    countersink_radius=8.0,
+    height=20.0,
+    countersink_depth=6.0,
+    pilot_depth=12.0,
+    segments=24,
+    center=(0.0, 0.0),
+):
+    vertices = []
+    vertex_ids = {}
+    faces = []
+    center_x, center_y = center
+
+    def vertex_id(point):
+        key = tuple(round(value, 8) for value in point)
+        if key not in vertex_ids:
+            vertex_ids[key] = len(vertices)
+            vertices.append(tuple(float(value) for value in point))
+        return vertex_ids[key]
+
+    def square_support(angle):
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
+        scale = max(abs(cosine), abs(sine))
+        return half_size * cosine / scale, half_size * sine / scale
+
+    z_step = height - countersink_depth
+    z_floor = height - pilot_depth
+    center_bottom = vertex_id((0.0, 0.0, 0.0))
+    center_floor = vertex_id((center_x, center_y, z_floor))
+
+    outer_bottom = []
+    outer_top = []
+    countersink_top = []
+    pilot_step = []
+    pilot_floor = []
+    for index in range(segments):
+        angle = 2.0 * math.pi * index / segments
+        outer_x, outer_y = square_support(angle)
+        countersink_x = center_x + countersink_radius * math.cos(angle)
+        countersink_y = center_y + countersink_radius * math.sin(angle)
+        pilot_x = center_x + through_radius * math.cos(angle)
+        pilot_y = center_y + through_radius * math.sin(angle)
+        outer_bottom.append(vertex_id((outer_x, outer_y, 0.0)))
+        outer_top.append(vertex_id((outer_x, outer_y, height)))
+        countersink_top.append(vertex_id((countersink_x, countersink_y, height)))
+        pilot_step.append(vertex_id((pilot_x, pilot_y, z_step)))
+        pilot_floor.append(vertex_id((pilot_x, pilot_y, z_floor)))
+
+    for index in range(segments):
+        next_index = (index + 1) % segments
+
+        faces.append((outer_top[index], outer_top[next_index], countersink_top[next_index]))
+        faces.append((outer_top[index], countersink_top[next_index], countersink_top[index]))
+
+        faces.append((outer_bottom[index], outer_bottom[next_index], outer_top[next_index]))
+        faces.append((outer_bottom[index], outer_top[next_index], outer_top[index]))
+
+        faces.append((pilot_step[index], countersink_top[next_index], pilot_step[next_index]))
+        faces.append((pilot_step[index], countersink_top[index], countersink_top[next_index]))
+
+        faces.append((pilot_floor[index], pilot_step[next_index], pilot_floor[next_index]))
+        faces.append((pilot_floor[index], pilot_step[index], pilot_step[next_index]))
+
+        faces.append((center_bottom, outer_bottom[index], outer_bottom[next_index]))
+        faces.append((center_floor, pilot_floor[next_index], pilot_floor[index]))
+
+    return vertices, faces
+
+
 def block_with_two_blind_counterbores_mesh(
     half_size=24.0,
     through_radius=4.0,
@@ -2828,6 +2900,76 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(step_text.count("ADVANCED_FACE"), 14)
             self.assertEqual(step_text.count("PLANE("), 10)
             self.assertGreaterEqual(step_text.count("FACE_BOUND"), 8)
+
+    def test_prismatic_block_with_blind_countersink_exports_clean_cone_and_cylinder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "blind_countersink.stl"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = blind_countersink_mesh()
+            write_ascii_stl(mesh_path, vertices, faces)
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertNotIn("FACETED_BREP", step_text)
+            self.assertEqual(step_text.count("CONICAL_SURFACE"), 1)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 1)
+            self.assertEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 0)
+            self.assertEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 0)
+            self.assertGreaterEqual(step_text.count("CIRCLE("), 5)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 9)
+            self.assertEqual(step_text.count("PLANE("), 7)
+            self.assertGreaterEqual(step_text.count("FACE_BOUND"), 3)
+
+    def test_off_center_rotated_blind_countersinks_stay_clean(self):
+        angle = math.radians(21.0)
+        rotation = (
+            (math.cos(angle), -math.sin(angle), 0.0),
+            (math.sin(angle), math.cos(angle), 0.0),
+            (0.0, 0.0, 1.0),
+        )
+        cases = [
+            {
+                "name": "offset_blind_countersink",
+                "center": (4.0, -2.5),
+                "rotation": None,
+            },
+            {
+                "name": "rotated_offset_blind_countersink",
+                "center": (4.0, -2.5),
+                "rotation": rotation,
+            },
+        ]
+
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = pathlib.Path(tmp)
+                    mesh_path = tmp_path / f"{case['name']}.stl"
+                    out_dir = tmp_path / "out"
+
+                    vertices, faces = blind_countersink_mesh(center=case["center"])
+                    if case["rotation"] is not None:
+                        vertices = transform_mesh(vertices, rotation=case["rotation"])
+                    write_ascii_stl(mesh_path, vertices, faces)
+                    _, report, _, _ = run_cli(mesh_path, out_dir)
+
+                    self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+                    self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+                    self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+                    step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+                    self.assertEqual(step_text.count("CONICAL_SURFACE"), 1)
+                    self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 1)
+                    self.assertEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 0)
+                    self.assertEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 0)
+                    self.assertEqual(step_text.count("ADVANCED_FACE"), 9)
+                    self.assertEqual(step_text.count("PLANE("), 7)
 
     def test_prismatic_block_with_boss_exports_clean_cylinder(self):
         with tempfile.TemporaryDirectory() as tmp:
