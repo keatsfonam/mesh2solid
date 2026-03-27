@@ -1404,9 +1404,10 @@ class CliIntegrationTests(unittest.TestCase):
 
             step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
             self.assertNotIn("FACETED_BREP", step_text)
-            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 0)
-            self.assertEqual(step_text.count("ADVANCED_FACE"), 14)
-            self.assertEqual(step_text.count("PLANE("), 14)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 2)
+            self.assertEqual(step_text.count("TRIMMED_CURVE"), 4)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 10)
+            self.assertEqual(step_text.count("PLANE("), 8)
 
     def test_prismatic_block_with_blind_bore_exports_clean_cylinder(self):
         with tempfile.TemporaryDirectory() as tmp:

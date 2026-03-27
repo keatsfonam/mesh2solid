@@ -154,7 +154,7 @@ blocks, L-brackets, channels, disconnected box assemblies, cross-shaped solids, 
 3MF box assemblies, and prismatic blocks with analytic cylindrical through-bores, including
 rotated off-axis, off-center, and varied aspect-ratio cases, plus blind cylindrical pockets,
 blind counterbores, simple counterbores, cylindrical bosses/posts, and standoff-style tubular
-bosses with concentric through-holes.
+bosses with concentric through-holes, plus obround through-slots with analytic half-cylinders.
 
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
 with upstream STL and 3MF models. Those smoke tests intentionally keep separate expectation
