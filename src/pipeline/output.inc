@@ -3634,9 +3634,7 @@ std::optional<GenericCylindricalThroughHoleExport> detect_generic_cylindrical_th
     CircleFit2D circle {};
   };
 
-  GenericCylindricalThroughHoleExport best_export;
-  std::size_t best_hole_count = 0;
-  std::size_t best_side_face_count = 0;
+  std::vector<GenericCylindricalThroughHole> candidate_holes;
 
   for (std::size_t i = 0; i < cap_candidates.size(); ++i) {
     for (std::size_t j = i + 1; j < cap_candidates.size(); ++j) {
@@ -3718,8 +3716,6 @@ std::optional<GenericCylindricalThroughHoleExport> detect_generic_cylindrical_th
 
       std::vector<bool> matched_bottom(bottom_loops.size(), false);
       std::unordered_set<int> used_side_faces;
-      std::vector<GenericCylindricalThroughHole> holes;
-      std::size_t total_side_faces = 0;
 
       for (const IndexedCircleLoop& top_loop : top_loops) {
         std::size_t best_bottom_index = bottom_loops.size();
@@ -3814,7 +3810,6 @@ std::optional<GenericCylindricalThroughHoleExport> detect_generic_cylindrical_th
 
         matched_bottom[best_bottom_index] = true;
         used_side_faces.insert(side_face_indices.begin(), side_face_indices.end());
-        total_side_faces += side_face_indices.size();
 
         const double radius = 0.5 * (top_loop.circle.radius + bottom_loop.circle.radius);
         const Vec2 center {
@@ -3830,7 +3825,7 @@ std::optional<GenericCylindricalThroughHoleExport> detect_generic_cylindrical_th
           continue;
         }
 
-        holes.push_back(GenericCylindricalThroughHole {
+        candidate_holes.push_back(GenericCylindricalThroughHole {
             top_face_index,
             bottom_face_index,
             top_loop.loop_index,
@@ -3841,24 +3836,64 @@ std::optional<GenericCylindricalThroughHoleExport> detect_generic_cylindrical_th
             side_face_indices,
         });
       }
-
-      if (holes.empty()) {
-        continue;
-      }
-
-      if (holes.size() > best_hole_count ||
-          (holes.size() == best_hole_count && total_side_faces > best_side_face_count)) {
-        best_hole_count = holes.size();
-        best_side_face_count = total_side_faces;
-        best_export.holes = std::move(holes);
-      }
     }
   }
 
-  if (best_export.holes.empty()) {
+  if (candidate_holes.empty()) {
     return std::nullopt;
   }
-  return best_export;
+
+  std::sort(candidate_holes.begin(),
+            candidate_holes.end(),
+            [](const GenericCylindricalThroughHole& lhs, const GenericCylindricalThroughHole& rhs) {
+              if (lhs.side_face_indices.size() != rhs.side_face_indices.size()) {
+                return lhs.side_face_indices.size() > rhs.side_face_indices.size();
+              }
+              if (std::abs(lhs.cylinder.radius - rhs.cylinder.radius) > 1e-9) {
+                return lhs.cylinder.radius > rhs.cylinder.radius;
+              }
+              if (lhs.top_face_index != rhs.top_face_index) {
+                return lhs.top_face_index < rhs.top_face_index;
+              }
+              return lhs.top_loop_index < rhs.top_loop_index;
+            });
+
+  auto make_loop_key = [](int face_index, std::size_t loop_index) -> std::uint64_t {
+    return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(face_index)) << 32U) |
+           static_cast<std::uint64_t>(loop_index);
+  };
+
+  std::unordered_set<std::uint64_t> used_loops;
+  std::unordered_set<int> used_side_faces;
+  GenericCylindricalThroughHoleExport export_result;
+  for (const GenericCylindricalThroughHole& hole : candidate_holes) {
+    const std::uint64_t top_key = make_loop_key(hole.top_face_index, hole.top_loop_index);
+    const std::uint64_t bottom_key = make_loop_key(hole.bottom_face_index, hole.bottom_loop_index);
+    if (used_loops.contains(top_key) || used_loops.contains(bottom_key)) {
+      continue;
+    }
+
+    bool side_conflict = false;
+    for (int face_index : hole.side_face_indices) {
+      if (used_side_faces.contains(face_index)) {
+        side_conflict = true;
+        break;
+      }
+    }
+    if (side_conflict) {
+      continue;
+    }
+
+    used_loops.insert(top_key);
+    used_loops.insert(bottom_key);
+    used_side_faces.insert(hole.side_face_indices.begin(), hole.side_face_indices.end());
+    export_result.holes.push_back(hole);
+  }
+
+  if (export_result.holes.empty()) {
+    return std::nullopt;
+  }
+  return export_result;
 }
 
 class StepBuilder {
@@ -9224,6 +9259,12 @@ bool write_step_file(const std::filesystem::path& path,
     return write_step_file_prismatic_multi_counterbore(path, reconstruction, *multi_counterbore);
   }
 
+  if (const std::optional<GenericCylindricalThroughHoleExport> generic_holes =
+          detect_generic_cylindrical_through_hole_export(reconstruction);
+      generic_holes.has_value()) {
+    return write_step_file_generic_cylindrical_holes(path, reconstruction, *generic_holes);
+  }
+
   if (const std::optional<SimplePrismaticMultiBoreExport> multi_bore =
           detect_simple_prismatic_multi_bore_export(reconstruction);
       multi_bore.has_value()) {
@@ -9234,12 +9275,6 @@ bool write_step_file(const std::filesystem::path& path,
           detect_simple_prismatic_bore_export(reconstruction);
       bore.has_value()) {
     return write_step_file_prismatic_bore(path, reconstruction, *bore);
-  }
-
-  if (const std::optional<GenericCylindricalThroughHoleExport> generic_holes =
-          detect_generic_cylindrical_through_hole_export(reconstruction);
-      generic_holes.has_value()) {
-    return write_step_file_generic_cylindrical_holes(path, reconstruction, *generic_holes);
   }
 
   StepBuilder step;

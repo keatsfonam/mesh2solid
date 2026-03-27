@@ -2213,6 +2213,38 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertGreaterEqual(step_text.count("CIRCLE("), 4)
             self.assertLess(step_text.count("ADVANCED_FACE"), report["reconstruction"]["face_count"])
 
+    def test_xy_nema_bracket_benchmark_upgrades_multiple_holes_to_cylinders(self):
+        mesh_path = EXAMPLES_DIR / "benchmark" / "cloudgripper" / "xy_nema_bracket.stl"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            out_dir = tmp_path / "out"
+
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+            self.assertGreaterEqual(step_text.count("CYLINDRICAL_SURFACE"), 7)
+            self.assertGreaterEqual(step_text.count("CIRCLE("), 12)
+            self.assertLess(step_text.count("ADVANCED_FACE"), report["reconstruction"]["face_count"])
+
+    def test_t4m1e_benchmark_upgrades_multiple_holes_to_cylinders(self):
+        mesh_path = EXAMPLES_DIR / "benchmark" / "bcn3d_moveo" / "t4m1e.stl"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            out_dir = tmp_path / "out"
+
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+            self.assertGreaterEqual(step_text.count("CYLINDRICAL_SURFACE"), 3)
+            self.assertGreaterEqual(step_text.count("CIRCLE("), 8)
+            self.assertLess(step_text.count("ADVANCED_FACE"), report["reconstruction"]["face_count"])
+
     def test_prismatic_block_with_round_bore_exports_clean_cylinder(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)
