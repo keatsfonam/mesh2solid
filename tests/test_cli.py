@@ -364,6 +364,60 @@ def counterbore_mesh(
     return vertices, faces
 
 
+def boss_mesh(half_size=20.0, radius=8.0, height=16.0, boss_height=10.0, segments=24):
+    vertices = []
+    vertex_ids = {}
+    faces = []
+
+    def vertex_id(point):
+        key = tuple(round(value, 8) for value in point)
+        if key not in vertex_ids:
+            vertex_ids[key] = len(vertices)
+            vertices.append(tuple(float(value) for value in point))
+        return vertex_ids[key]
+
+    def square_support(angle):
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
+        scale = max(abs(cosine), abs(sine))
+        return half_size * cosine / scale, half_size * sine / scale
+
+    center_bottom = vertex_id((0.0, 0.0, 0.0))
+    center_top = vertex_id((0.0, 0.0, height + boss_height))
+
+    outer_bottom = []
+    outer_top = []
+    boss_base = []
+    boss_top = []
+    for index in range(segments):
+        angle = 2.0 * math.pi * index / segments
+        outer_x, outer_y = square_support(angle)
+        boss_x = radius * math.cos(angle)
+        boss_y = radius * math.sin(angle)
+        outer_bottom.append(vertex_id((outer_x, outer_y, 0.0)))
+        outer_top.append(vertex_id((outer_x, outer_y, height)))
+        boss_base.append(vertex_id((boss_x, boss_y, height)))
+        boss_top.append(vertex_id((boss_x, boss_y, height + boss_height)))
+
+    for index in range(segments):
+        next_index = (index + 1) % segments
+
+        faces.append((outer_top[index], outer_top[next_index], boss_base[next_index]))
+        faces.append((outer_top[index], boss_base[next_index], boss_base[index]))
+
+        faces.append((center_bottom, outer_bottom[index], outer_bottom[next_index]))
+
+        faces.append((outer_bottom[index], outer_bottom[next_index], outer_top[next_index]))
+        faces.append((outer_bottom[index], outer_top[next_index], outer_top[index]))
+
+        faces.append((boss_base[index], boss_top[next_index], boss_base[next_index]))
+        faces.append((boss_base[index], boss_top[index], boss_top[next_index]))
+
+        faces.append((center_top, boss_top[index], boss_top[next_index]))
+
+    return vertices, faces
+
+
 def transform_mesh(vertices, *, rotation=None, translation=(0.0, 0.0, 0.0)):
     if rotation is None:
         rotation = (
@@ -1104,6 +1158,28 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(step_text.count("ADVANCED_FACE"), 9)
             self.assertEqual(step_text.count("PLANE("), 7)
             self.assertGreaterEqual(step_text.count("FACE_BOUND"), 4)
+
+    def test_prismatic_block_with_boss_exports_clean_cylinder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "boss.stl"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = boss_mesh()
+            write_ascii_stl(mesh_path, vertices, faces)
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertNotIn("FACETED_BREP", step_text)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 1)
+            self.assertGreaterEqual(step_text.count("CIRCLE("), 4)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 8)
+            self.assertEqual(step_text.count("PLANE("), 7)
+            self.assertGreaterEqual(step_text.count("FACE_BOUND"), 2)
 
     def test_rotated_prismatic_block_with_round_bore_stays_clean(self):
         with tempfile.TemporaryDirectory() as tmp:
