@@ -1394,6 +1394,72 @@ class CliIntegrationTests(unittest.TestCase):
                     )
                     self.assertEqual(step_text.count("PLANE("), case["expected_planes"])
 
+    def test_rotated_off_center_cylindrical_features_stay_clean(self):
+        rotation = rotation_matrix_xyz(23.0, -31.0, 19.0)
+        translation = (9.0, -12.0, 15.0)
+        cases = [
+            {
+                "name": "rotated_offset_blind_bore",
+                "mesh_fn": blind_bore_mesh,
+                "mesh_kwargs": {"center": (5.5, -3.0)},
+                "expected_cylinders": 1,
+                "expected_advanced_faces": 8,
+                "expected_planes": 7,
+            },
+            {
+                "name": "rotated_offset_counterbore",
+                "mesh_fn": counterbore_mesh,
+                "mesh_kwargs": {"center": (5.5, -3.0)},
+                "expected_cylinders": 2,
+                "expected_advanced_faces": 9,
+                "expected_planes": 7,
+            },
+            {
+                "name": "rotated_offset_boss",
+                "mesh_fn": boss_mesh,
+                "mesh_kwargs": {"center": (5.5, -3.0)},
+                "expected_cylinders": 1,
+                "expected_advanced_faces": 8,
+                "expected_planes": 7,
+            },
+            {
+                "name": "rotated_offset_standoff",
+                "mesh_fn": standoff_mesh,
+                "mesh_kwargs": {"center": (5.5, -3.0)},
+                "expected_cylinders": 2,
+                "expected_advanced_faces": 9,
+                "expected_planes": 7,
+            },
+        ]
+
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = pathlib.Path(tmp)
+                    mesh_path = tmp_path / f"{case['name']}.stl"
+                    out_dir = tmp_path / "out"
+
+                    vertices, faces = case["mesh_fn"](**case["mesh_kwargs"])
+                    transformed_vertices = transform_mesh(
+                        vertices, rotation=rotation, translation=translation
+                    )
+                    write_ascii_stl(mesh_path, transformed_vertices, faces)
+                    _, report, _, _ = run_cli(mesh_path, out_dir)
+
+                    self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+                    self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+                    self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+                    step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+                    self.assertNotIn("FACETED_BREP", step_text)
+                    self.assertEqual(
+                        step_text.count("CYLINDRICAL_SURFACE"), case["expected_cylinders"]
+                    )
+                    self.assertEqual(
+                        step_text.count("ADVANCED_FACE"), case["expected_advanced_faces"]
+                    )
+                    self.assertEqual(step_text.count("PLANE("), case["expected_planes"])
+
     def test_rotated_prismatic_block_with_round_bore_stays_clean(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)
