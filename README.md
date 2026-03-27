@@ -168,8 +168,8 @@ pocket patterns, obround through-slots with analytic half-cylinders, and benchma
 planar bodies whose faceted circular through-holes are upgraded to analytic cylinders at STEP export,
 including bodies with multiple distinct cap-face pairs in the same part plus mixed blind cylindrical
 features on more complex planar supports, and mixed planar bodies whose faceted extruded side-profile
-bands are upgraded to smooth B-spline STEP faces, including cap-pair bands that are not aligned to
-the world Z axis.
+bands are upgraded to smooth STEP faces, using exact cylinders when the recovered profile is circular
+and B-spline faces otherwise, including cap-pair bands that are not aligned to the world Z axis.
 
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
 with upstream STL and 3MF models. The supported benchmark gate is now the Docker full-stack
