@@ -156,7 +156,8 @@ rotated off-axis, off-center, repeated multi-bore mounting patterns, repeated mu
 blind counterbores, simple counterbores, cylindrical bosses/posts, repeated multi-boss pads,
 and standoff-style tubular
 bosses with concentric through-holes, plus repeated multi-blind-bore and repeated multi-blind-counterbore
-pocket patterns, and obround through-slots with analytic half-cylinders.
+pocket patterns, obround through-slots with analytic half-cylinders, and benchmark-derived
+planar bodies whose faceted circular through-holes are upgraded to analytic cylinders at STEP export.
 
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
 with upstream STL and 3MF models. Those smoke tests intentionally keep separate expectation
