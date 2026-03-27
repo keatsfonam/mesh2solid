@@ -160,7 +160,7 @@ outputs under `tests/golden/`. It also includes a more complex bridge example un
 The test suite also generates a deterministic prismatic corpus at runtime, covering stepped
 blocks, L-brackets, channels, disconnected box assemblies, cross-shaped solids, multi-item
 3MF box assemblies, and prismatic blocks with analytic cylindrical through-bores, including
-rotated off-axis, off-center, repeated multi-bore mounting patterns, repeated multi-counterbore mounting patterns, and varied aspect-ratio cases, plus blind cylindrical pockets,
+rotated off-axis, off-center, repeated multi-bore mounting patterns, repeated multi-counterbore mounting patterns, repeated multi-countersink mounting patterns, and varied aspect-ratio cases, plus blind cylindrical pockets,
 blind counterbores, simple counterbores, simple countersinks/conical seats, cylindrical bosses/posts, repeated multi-boss pads,
 and standoff-style tubular
 bosses with concentric through-holes, plus repeated multi-blind-bore and repeated multi-blind-counterbore
