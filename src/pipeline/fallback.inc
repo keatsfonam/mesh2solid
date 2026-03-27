@@ -215,6 +215,313 @@ MeshModel extract_triangle_component_mesh(const MeshModel& mesh,
   return component;
 }
 
+struct CircleFit2D {
+  Vec2 center {};
+  double radius {};
+  double rms_error {};
+  double max_error {};
+};
+
+struct SimpleCylinderPrimitive {
+  Vec3 base_center {};
+  Vec3 axis {};
+  double radius {};
+  double height {};
+};
+
+bool solve_linear_3x3(double matrix[3][4], std::array<double, 3>& solution) {
+  for (int column = 0; column < 3; ++column) {
+    int pivot = column;
+    double pivot_value = std::abs(matrix[pivot][column]);
+    for (int row = column + 1; row < 3; ++row) {
+      const double candidate = std::abs(matrix[row][column]);
+      if (candidate > pivot_value) {
+        pivot = row;
+        pivot_value = candidate;
+      }
+    }
+    if (pivot_value <= 1e-12) {
+      return false;
+    }
+    if (pivot != column) {
+      for (int entry = column; entry < 4; ++entry) {
+        std::swap(matrix[column][entry], matrix[pivot][entry]);
+      }
+    }
+
+    const double divisor = matrix[column][column];
+    for (int entry = column; entry < 4; ++entry) {
+      matrix[column][entry] /= divisor;
+    }
+
+    for (int row = 0; row < 3; ++row) {
+      if (row == column) {
+        continue;
+      }
+      const double factor = matrix[row][column];
+      if (std::abs(factor) <= 1e-12) {
+        continue;
+      }
+      for (int entry = column; entry < 4; ++entry) {
+        matrix[row][entry] -= factor * matrix[column][entry];
+      }
+    }
+  }
+
+  solution = {matrix[0][3], matrix[1][3], matrix[2][3]};
+  return true;
+}
+
+std::optional<CircleFit2D> fit_circle_2d(const std::vector<Vec2>& points) {
+  if (points.size() < 3) {
+    return std::nullopt;
+  }
+
+  double sum_x = 0.0;
+  double sum_y = 0.0;
+  double sum_xx = 0.0;
+  double sum_yy = 0.0;
+  double sum_xy = 0.0;
+  double sum_xxx = 0.0;
+  double sum_yyy = 0.0;
+  double sum_xxy = 0.0;
+  double sum_xyy = 0.0;
+
+  for (const Vec2& point : points) {
+    const double x = point.x;
+    const double y = point.y;
+    const double xx = x * x;
+    const double yy = y * y;
+    sum_x += x;
+    sum_y += y;
+    sum_xx += xx;
+    sum_yy += yy;
+    sum_xy += x * y;
+    sum_xxx += xx * x;
+    sum_yyy += yy * y;
+    sum_xxy += xx * y;
+    sum_xyy += x * yy;
+  }
+
+  double system[3][4] = {
+      {sum_xx, sum_xy, sum_x, -(sum_xxx + sum_xyy)},
+      {sum_xy, sum_yy, sum_y, -(sum_xxy + sum_yyy)},
+      {sum_x, sum_y, static_cast<double>(points.size()), -(sum_xx + sum_yy)},
+  };
+  std::array<double, 3> solution {};
+  if (!solve_linear_3x3(system, solution)) {
+    return std::nullopt;
+  }
+
+  const double a = solution[0];
+  const double b = solution[1];
+  const double c = solution[2];
+  const Vec2 center {-0.5 * a, -0.5 * b};
+  const double radius_squared = center.x * center.x + center.y * center.y - c;
+  if (radius_squared <= 1e-12) {
+    return std::nullopt;
+  }
+
+  CircleFit2D fit;
+  fit.center = center;
+  fit.radius = std::sqrt(radius_squared);
+  double error_sum = 0.0;
+  for (const Vec2& point : points) {
+    const double dx = point.x - fit.center.x;
+    const double dy = point.y - fit.center.y;
+    const double error = std::abs(std::sqrt(dx * dx + dy * dy) - fit.radius);
+    error_sum += error * error;
+    fit.max_error = std::max(fit.max_error, error);
+  }
+  fit.rms_error = std::sqrt(error_sum / static_cast<double>(points.size()));
+  return fit;
+}
+
+std::optional<SimpleCylinderPrimitive> detect_simple_cylinder_component(
+    const MeshModel& mesh,
+    const Tolerances& tolerances) {
+  if (mesh.triangles.size() < 16 || mesh.vertices.size() < 10 || !mesh.bounds.valid) {
+    return std::nullopt;
+  }
+
+  const double total_area = std::accumulate(
+      mesh.triangles.begin(), mesh.triangles.end(), 0.0,
+      [](double sum, const Triangle& triangle) { return sum + triangle.area; });
+  if (total_area <= 1e-9) {
+    return std::nullopt;
+  }
+
+  const double cap_angle_degrees = std::max(8.0, tolerances.parallel_angle_degrees * 1.5);
+  const double cap_alignment = std::cos(cap_angle_degrees * kPi / 180.0);
+  const double side_alignment_limit = std::sin(cap_angle_degrees * kPi / 180.0);
+
+  Vec3 axis {};
+  double best_score = -1.0;
+  for (const Triangle& seed : mesh.triangles) {
+    const Vec3 seed_normal = normalized(seed.normal);
+    if (length_squared(seed_normal) <= 1e-12) {
+      continue;
+    }
+
+    double positive_cap_area = 0.0;
+    double negative_cap_area = 0.0;
+    double side_area = 0.0;
+    for (const Triangle& triangle : mesh.triangles) {
+      const double alignment = dot(seed_normal, normalized(triangle.normal));
+      if (alignment >= cap_alignment) {
+        positive_cap_area += triangle.area;
+      } else if (alignment <= -cap_alignment) {
+        negative_cap_area += triangle.area;
+      }
+      if (std::abs(alignment) <= side_alignment_limit) {
+        side_area += triangle.area;
+      }
+    }
+
+    if (positive_cap_area <= 0.0 || negative_cap_area <= 0.0 || side_area <= 0.0) {
+      continue;
+    }
+
+    const double score = std::min(positive_cap_area, negative_cap_area) + side_area * 0.25;
+    if (score > best_score) {
+      best_score = score;
+      axis = seed_normal;
+    }
+  }
+
+  if (best_score <= 0.0) {
+    return std::nullopt;
+  }
+
+  std::vector<int> positive_caps;
+  std::vector<int> negative_caps;
+  std::vector<int> side_triangles;
+  positive_caps.reserve(mesh.triangles.size());
+  negative_caps.reserve(mesh.triangles.size());
+  side_triangles.reserve(mesh.triangles.size());
+
+  double positive_cap_area = 0.0;
+  double negative_cap_area = 0.0;
+  double side_area = 0.0;
+  for (std::size_t triangle_index = 0; triangle_index < mesh.triangles.size(); ++triangle_index) {
+    const Triangle& triangle = mesh.triangles[triangle_index];
+    const double alignment = dot(axis, normalized(triangle.normal));
+    if (alignment >= cap_alignment) {
+      positive_caps.push_back(static_cast<int>(triangle_index));
+      positive_cap_area += triangle.area;
+    } else if (alignment <= -cap_alignment) {
+      negative_caps.push_back(static_cast<int>(triangle_index));
+      negative_cap_area += triangle.area;
+    } else if (std::abs(alignment) <= side_alignment_limit) {
+      side_triangles.push_back(static_cast<int>(triangle_index));
+      side_area += triangle.area;
+    }
+  }
+
+  if (positive_caps.empty() || negative_caps.empty() || side_triangles.size() < 16) {
+    return std::nullopt;
+  }
+  if (positive_cap_area < total_area * 0.08 || negative_cap_area < total_area * 0.08 ||
+      side_area < total_area * 0.30) {
+    return std::nullopt;
+  }
+
+  auto weighted_plane_coordinate = [&mesh, &axis](const std::vector<int>& triangle_indices) {
+    double coordinate_sum = 0.0;
+    double weight_sum = 0.0;
+    for (int triangle_index : triangle_indices) {
+      const Triangle& triangle = mesh.triangles[triangle_index];
+      Vec3 centroid {};
+      for (int vertex_index : triangle.vertices) {
+        centroid += mesh.vertices[vertex_index];
+      }
+      centroid = centroid / 3.0;
+      coordinate_sum += dot(centroid, axis) * triangle.area;
+      weight_sum += triangle.area;
+    }
+    return weight_sum <= 1e-12 ? 0.0 : coordinate_sum / weight_sum;
+  };
+
+  double positive_plane = weighted_plane_coordinate(positive_caps);
+  double negative_plane = weighted_plane_coordinate(negative_caps);
+  if (positive_plane < negative_plane) {
+    axis = axis * -1.0;
+    positive_plane *= -1.0;
+    negative_plane *= -1.0;
+  }
+
+  const PlaneBasis basis = basis_from_normal(axis);
+  std::set<int> side_vertex_indices;
+  for (int triangle_index : side_triangles) {
+    for (int vertex_index : mesh.triangles[triangle_index].vertices) {
+      side_vertex_indices.insert(vertex_index);
+    }
+  }
+  if (side_vertex_indices.size() < 12) {
+    return std::nullopt;
+  }
+
+  std::vector<Vec2> radial_points;
+  radial_points.reserve(side_vertex_indices.size());
+  for (int vertex_index : side_vertex_indices) {
+    const Vec3& vertex = mesh.vertices[vertex_index];
+    radial_points.push_back({dot(vertex, basis.u), dot(vertex, basis.v)});
+  }
+
+  const std::optional<CircleFit2D> circle_fit = fit_circle_2d(radial_points);
+  if (!circle_fit.has_value() || circle_fit->radius <= 1e-6) {
+    return std::nullopt;
+  }
+
+  const double diagonal = bounds_diagonal(mesh.bounds);
+  const double radial_tolerance =
+      std::max({diagonal * 0.01, circle_fit->radius * 0.03, tolerances.plane_distance * 2.0});
+  if (circle_fit->rms_error > radial_tolerance * 0.45 ||
+      circle_fit->max_error > radial_tolerance) {
+    return std::nullopt;
+  }
+
+  const double height = positive_plane - negative_plane;
+  if (height <= radial_tolerance) {
+    return std::nullopt;
+  }
+
+  const Vec3 axis_origin = basis.u * circle_fit->center.x + basis.v * circle_fit->center.y;
+  const Vec3 base_center = axis_origin + axis * negative_plane;
+
+  auto radial_distance_from_axis = [&](const Vec3& point) {
+    const Vec3 relative = point - axis_origin;
+    const double axial = dot(relative, axis);
+    const Vec3 radial = relative - axis * axial;
+    return length(radial);
+  };
+
+  Vec3 cap_centroid_sum {};
+  std::size_t cap_centroid_count = 0;
+  for (int triangle_index : positive_caps) {
+    for (int vertex_index : mesh.triangles[triangle_index].vertices) {
+      cap_centroid_sum += mesh.vertices[vertex_index];
+      ++cap_centroid_count;
+    }
+  }
+  for (int triangle_index : negative_caps) {
+    for (int vertex_index : mesh.triangles[triangle_index].vertices) {
+      cap_centroid_sum += mesh.vertices[vertex_index];
+      ++cap_centroid_count;
+    }
+  }
+  if (cap_centroid_count == 0) {
+    return std::nullopt;
+  }
+  const Vec3 cap_centroid = cap_centroid_sum / static_cast<double>(cap_centroid_count);
+  const double centroid_axis_offset = radial_distance_from_axis(cap_centroid);
+  if (centroid_axis_offset > radial_tolerance * 2.0) {
+    return std::nullopt;
+  }
+
+  return SimpleCylinderPrimitive {base_center, axis, circle_fit->radius, height};
+}
+
 TopoDS_Shape make_occt_compound(const std::vector<TopoDS_Shape>& shapes) {
   if (shapes.empty()) {
     return {};
@@ -593,6 +900,48 @@ TopoDS_Shape fix_occt_promoted_solids(const TopoDS_Shape& shape, double sewing_t
   return make_occt_compound(fixed_solids);
 }
 
+TopoDS_Shape build_occt_simple_cylinder_shape(const SimpleCylinderPrimitive& cylinder) {
+  if (cylinder.radius <= 1e-6 || cylinder.height <= 1e-6 ||
+      length_squared(cylinder.axis) <= 1e-12) {
+    return {};
+  }
+
+  const PlaneBasis basis = basis_from_normal(cylinder.axis);
+  gp_Ax2 axis(gp_Pnt(cylinder.base_center.x, cylinder.base_center.y, cylinder.base_center.z),
+              gp_Dir(cylinder.axis.x, cylinder.axis.y, cylinder.axis.z),
+              gp_Dir(basis.u.x, basis.u.y, basis.u.z));
+  BRepPrimAPI_MakeCylinder cylinder_builder(axis, cylinder.radius, cylinder.height);
+  if (!cylinder_builder.IsDone()) {
+    return {};
+  }
+  return cylinder_builder.Shape();
+}
+
+TopoDS_Shape build_occt_simple_primitive_shape(const MeshModel& mesh, const Tolerances& tolerances) {
+  const std::vector<std::vector<int>> components = collect_triangle_components(mesh);
+  if (components.empty()) {
+    return {};
+  }
+
+  std::vector<TopoDS_Shape> shapes;
+  shapes.reserve(components.size());
+  for (const std::vector<int>& component : components) {
+    const MeshModel component_mesh = extract_triangle_component_mesh(mesh, component);
+    const std::optional<SimpleCylinderPrimitive> cylinder =
+        detect_simple_cylinder_component(component_mesh, tolerances);
+    if (!cylinder.has_value()) {
+      return {};
+    }
+    TopoDS_Shape shape = build_occt_simple_cylinder_shape(*cylinder);
+    if (shape.IsNull()) {
+      return {};
+    }
+    shapes.push_back(shape);
+  }
+
+  return make_occt_compound(shapes);
+}
+
 TopoDS_Shape finalize_occt_solid_candidate(const TopoDS_Shape& shape, double sewing_tolerance) {
   if (shape.IsNull()) {
     return {};
@@ -833,6 +1182,30 @@ ReconstructionResult reconstruct_occt_faceted_mesh_fallback(const MeshModel& mes
   return result;
 }
 
+bool write_step_file_occt_simple_primitives(const std::filesystem::path& path,
+                                            const MeshModel& mesh,
+                                            const Tolerances& tolerances) {
+  const TopoDS_Shape shape = build_occt_simple_primitive_shape(mesh, tolerances);
+  if (shape.IsNull()) {
+    return false;
+  }
+
+  try {
+    STEPControl_Writer writer;
+    writer.SetTolerance(occt_sewing_tolerance(mesh, tolerances));
+    const STEPControl_StepModelType mode =
+        shape.ShapeType() == TopAbs_SOLID ? STEPControl_ManifoldSolidBrep : STEPControl_AsIs;
+    if (writer.Transfer(shape, mode) != IFSelect_RetDone) {
+      return false;
+    }
+
+    const std::string path_string = path.string();
+    return writer.Write(path_string.c_str()) == IFSelect_RetDone;
+  } catch (const Standard_Failure&) {
+    return false;
+  }
+}
+
 bool write_step_file_occt(const std::filesystem::path& path,
                           const MeshModel& mesh,
                           const Tolerances& tolerances) {
@@ -858,6 +1231,12 @@ bool write_step_file_occt(const std::filesystem::path& path,
   }
 }
 #else
+bool write_step_file_occt_simple_primitives(const std::filesystem::path&,
+                                            const MeshModel&,
+                                            const Tolerances&) {
+  return false;
+}
+
 bool write_step_file_occt(const std::filesystem::path&,
                           const MeshModel&,
                           const Tolerances&) {

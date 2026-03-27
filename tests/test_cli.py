@@ -601,6 +601,19 @@ class CliIntegrationTests(unittest.TestCase):
                                 case["max_non_manifold_edges"],
                             )
 
+    def test_simple_cylinder_exports_cylindrical_surface(self):
+        mesh_path = EXAMPLES_DIR / "benchmark" / "3mf_samples" / "core_cylinder.3mf"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            out_dir = tmp_path / "out"
+
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertIn("CYLINDRICAL_SURFACE", step_text)
+            self.assertIn("CIRCLE(", step_text)
+
 
 if __name__ == "__main__":
     unittest.main()

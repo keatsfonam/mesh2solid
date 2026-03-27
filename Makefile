@@ -28,6 +28,7 @@ hard-bench: $(TARGET)
 	python3 benchmarks/run_examples.py --expectation-profile host-minimal
 
 cmake-minimal:
+	mkdir -p build-cmake
 	cmake --preset host-minimal
 	cmake --build --preset host-minimal
 
@@ -36,15 +37,18 @@ docker-image:
 
 docker-build: docker-image
 	rm -rf build-cmake/docker-full
-	$(DOCKER_RUN) bash -lc "cmake --preset docker-full && cmake --build --preset docker-full"
+	mkdir -p build-cmake
+	$(DOCKER_RUN) bash -lc "cmake -S . -B build-cmake/docker-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DMESH2SOLID_ENABLE_CGAL=ON -DMESH2SOLID_ENABLE_OPENCASCADE=ON && cmake --build build-cmake/docker-full"
 
 docker-test: docker-image
 	rm -rf build-cmake/docker-full
-	$(DOCKER_RUN) bash -lc "cmake --preset docker-full && cmake --build --preset docker-full && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 -m unittest discover -s tests -p 'test_*.py'"
+	mkdir -p build-cmake
+	$(DOCKER_RUN) bash -lc "cmake -S . -B build-cmake/docker-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DMESH2SOLID_ENABLE_CGAL=ON -DMESH2SOLID_ENABLE_OPENCASCADE=ON && cmake --build build-cmake/docker-full && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 -m unittest discover -s tests -p 'test_*.py'"
 
 docker-hard-bench: docker-image
 	rm -rf build-cmake/docker-full
-	$(DOCKER_RUN) bash -lc "cmake --preset docker-full && cmake --build --preset docker-full && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 benchmarks/run_examples.py --expectation-profile docker-full"
+	mkdir -p build-cmake
+	$(DOCKER_RUN) bash -lc "cmake -S . -B build-cmake/docker-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DMESH2SOLID_ENABLE_CGAL=ON -DMESH2SOLID_ENABLE_OPENCASCADE=ON && cmake --build build-cmake/docker-full && MESH2SOLID_BIN=build-cmake/docker-full/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 benchmarks/run_examples.py --expectation-profile docker-full"
 
 docker-shell: docker-image
 	docker run --rm -it -u $$(id -u):$$(id -g) -v "$(CURDIR)":/workspace -w /workspace $(DOCKER_IMAGE) bash

@@ -20,6 +20,7 @@ to keep expanding mesh inputs without renaming the core tool again later.
 - Optionally regularizes detected planes with CGAL before constraint solving when that backend is available.
 - Builds a constraint graph for coplanar, parallel, and perpendicular plane relations.
 - Reconstructs planar shell faces from snapped boundary loops.
+- Upgrades simple cylindrical solids to true curved STEP surfaces instead of planar side facets.
 - Falls back to a faceted mesh B-Rep path when the repaired mesh is closed but the analytic planar path cannot confidently emit a solid.
 - Emits:
   - `cleaned_mesh.stl`
@@ -74,9 +75,9 @@ Open a shell inside the container:
 make docker-shell
 ```
 
-The Docker workflow uses the `docker-full` CMake preset from `CMakePresets.json`.
-Those targets intentionally clear `build-cmake/docker-full` first so a stale Linux build tree
-does not get mixed with host-side artifacts.
+The Docker workflow uses an explicit full-stack CMake configure so it behaves consistently
+inside the container even when the workspace starts clean. The matching `docker-full` preset
+is still available in `CMakePresets.json` for manual local use.
 
 For a lightweight host-only fallback build:
 

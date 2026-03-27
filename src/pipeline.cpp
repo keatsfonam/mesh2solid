@@ -39,6 +39,7 @@
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <STEPControl_Writer.hxx>
@@ -53,6 +54,8 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Shell.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #endif
 
@@ -1152,19 +1155,27 @@ void write_outputs(const AnalyzeOptions& options, RunReport& report) {
              reconstruction_debug_json(report.reconstruction));
 
   if (report.reconstruction.outcome == ReconstructionOutcome::SolidCreated) {
+    const Tolerances reconstruction_tolerances =
+        build_tolerances(report.reconstruction_mesh, options.preset);
+    const std::filesystem::path step_path = options.output_dir / "reconstruction.step";
     if (report.reconstruction.method == ReconstructionMethod::OcctFacetedMeshFallback) {
-      const Tolerances reconstruction_tolerances =
-          build_tolerances(report.reconstruction_mesh, options.preset);
       report.reconstruction.step_written =
-          write_step_file_occt(options.output_dir / "reconstruction.step",
-                               report.reconstruction_mesh, reconstruction_tolerances);
+          write_step_file_occt(step_path, report.reconstruction_mesh, reconstruction_tolerances);
       if (!report.reconstruction.step_written) {
-        report.reconstruction.step_written =
-            write_step_file(options.output_dir / "reconstruction.step", report.reconstruction);
+        report.reconstruction.step_written = write_step_file(step_path, report.reconstruction);
       }
     } else {
+      std::error_code remove_error;
+      std::filesystem::remove(step_path, remove_error);
+      const bool primitive_export_reported =
+          write_step_file_occt_simple_primitives(step_path, report.reconstruction_mesh,
+                                                 reconstruction_tolerances);
       report.reconstruction.step_written =
-          write_step_file(options.output_dir / "reconstruction.step", report.reconstruction);
+          primitive_export_reported ||
+          (std::filesystem::exists(step_path) && std::filesystem::file_size(step_path) > 0);
+      if (!report.reconstruction.step_written) {
+        report.reconstruction.step_written = write_step_file(step_path, report.reconstruction);
+      }
     }
   } else {
     report.reconstruction.step_written = false;
