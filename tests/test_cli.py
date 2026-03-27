@@ -265,6 +265,72 @@ def write_basic_3mf(path: pathlib.Path, vertices, faces, *, unit="millimeter", b
         archive.writestr("3D/3dmodel.model", model_xml)
 
 
+def write_multi_item_3mf(path: pathlib.Path, vertices, faces, *, build_transforms, unit="millimeter"):
+    vertex_lines = [
+        f'          <vertex x="{x}" y="{y}" z="{z}" />'
+        for x, y, z in vertices
+    ]
+    triangle_lines = [
+        f'          <triangle v1="{a}" v2="{b}" v3="{c}" />'
+        for a, b, c in faces
+    ]
+    build_lines = [
+        (
+            f'    <item objectid="1" transform="{transform}" />'
+            if transform is not None
+            else '    <item objectid="1" />'
+        )
+        for transform in build_transforms
+    ]
+    model_xml = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            f'<model unit="{unit}" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">',
+            "  <resources>",
+            '    <object id="1" type="model">',
+            "      <mesh>",
+            "        <vertices>",
+            *vertex_lines,
+            "        </vertices>",
+            "        <triangles>",
+            *triangle_lines,
+            "        </triangles>",
+            "      </mesh>",
+            "    </object>",
+            "  </resources>",
+            "  <build>",
+            *build_lines,
+            "  </build>",
+            "</model>",
+            "",
+        ]
+    )
+    content_types_xml = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+            '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />',
+            '  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />',
+            "</Types>",
+            "",
+        ]
+    )
+    relationships_xml = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+            '  <Relationship Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" Target="/3D/3dmodel.model" />',
+            "</Relationships>",
+            "",
+        ]
+    )
+
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("_rels/.rels", relationships_xml)
+        archive.writestr("3D/3dmodel.model", model_xml)
+
+
 PRISMATIC_VOXEL_CASES = {
     "l_bracket": {
         "cells": {
@@ -752,6 +818,35 @@ class CliIntegrationTests(unittest.TestCase):
                         step_text.count("ADVANCED_FACE"), case["expected_faces"]
                     )
                     self.assertEqual(step_text.count("PLANE("), case["expected_faces"])
+
+    def test_multi_item_3mf_prismatic_boxes_stay_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "prismatic_boxes.3mf"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = cube_mesh(size=10.0)
+            write_multi_item_3mf(
+                mesh_path,
+                vertices,
+                faces,
+                build_transforms=[
+                    "1 0 0 0 1 0 0 0 1 0 0 0",
+                    "1 0 0 0 1 0 0 0 1 40 0 0",
+                ],
+            )
+
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertNotIn("FACETED_BREP", step_text)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 0)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 12)
+            self.assertEqual(step_text.count("PLANE("), 12)
 
 
 if __name__ == "__main__":
