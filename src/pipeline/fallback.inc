@@ -206,6 +206,15 @@ struct SimpleCylinderPrimitive {
   double height {};
 };
 
+struct SimpleConicalFrustumPrimitive {
+  Vec3 base_center {};
+  Vec3 axis {};
+  Vec3 ref_direction {};
+  double base_radius {};
+  double top_radius {};
+  double height {};
+};
+
 bool solve_linear_3x3(double matrix[3][4], std::array<double, 3>& solution) {
   for (int column = 0; column < 3; ++column) {
     int pivot = column;
