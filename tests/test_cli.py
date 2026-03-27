@@ -1455,6 +1455,14 @@ class CliIntegrationTests(unittest.TestCase):
                 "expected_planes": 7,
             },
             {
+                "name": "offset_blind_counterbore",
+                "mesh_fn": blind_counterbore_mesh,
+                "mesh_kwargs": {"center": (6.0, -4.0)},
+                "expected_cylinders": 2,
+                "expected_advanced_faces": 10,
+                "expected_planes": 8,
+            },
+            {
                 "name": "offset_boss",
                 "mesh_fn": boss_mesh,
                 "mesh_kwargs": {"center": (6.0, -4.0)},
@@ -1516,6 +1524,14 @@ class CliIntegrationTests(unittest.TestCase):
                 "expected_cylinders": 2,
                 "expected_advanced_faces": 9,
                 "expected_planes": 7,
+            },
+            {
+                "name": "rotated_offset_blind_counterbore",
+                "mesh_fn": blind_counterbore_mesh,
+                "mesh_kwargs": {"center": (5.5, -3.0)},
+                "expected_cylinders": 2,
+                "expected_advanced_faces": 10,
+                "expected_planes": 8,
             },
             {
                 "name": "rotated_offset_boss",
