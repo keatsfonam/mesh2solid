@@ -259,6 +259,46 @@ def transform_mesh(vertices, *, rotation=None, translation=(0.0, 0.0, 0.0)):
     return transformed
 
 
+def rotation_matrix_xyz(angle_x_degrees=0.0, angle_y_degrees=0.0, angle_z_degrees=0.0):
+    angle_x = math.radians(angle_x_degrees)
+    angle_y = math.radians(angle_y_degrees)
+    angle_z = math.radians(angle_z_degrees)
+
+    cos_x = math.cos(angle_x)
+    sin_x = math.sin(angle_x)
+    cos_y = math.cos(angle_y)
+    sin_y = math.sin(angle_y)
+    cos_z = math.cos(angle_z)
+    sin_z = math.sin(angle_z)
+
+    rotate_x = (
+        (1.0, 0.0, 0.0),
+        (0.0, cos_x, -sin_x),
+        (0.0, sin_x, cos_x),
+    )
+    rotate_y = (
+        (cos_y, 0.0, sin_y),
+        (0.0, 1.0, 0.0),
+        (-sin_y, 0.0, cos_y),
+    )
+    rotate_z = (
+        (cos_z, -sin_z, 0.0),
+        (sin_z, cos_z, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+
+    def multiply(left, right):
+        return tuple(
+            tuple(
+                sum(left[row][index] * right[index][column] for index in range(3))
+                for column in range(3)
+            )
+            for row in range(3)
+        )
+
+    return multiply(rotate_z, multiply(rotate_y, rotate_x))
+
+
 def write_ascii_stl(path: pathlib.Path, vertices, faces):
     lines = ["solid fixture"]
     for a, b, c in faces:
@@ -899,17 +939,7 @@ class CliIntegrationTests(unittest.TestCase):
             out_dir = tmp_path / "out"
 
             vertices, faces = box_with_round_bore_mesh()
-            angle_x = math.radians(19.0)
-            angle_y = math.radians(-27.0)
-            cos_x = math.cos(angle_x)
-            sin_x = math.sin(angle_x)
-            cos_y = math.cos(angle_y)
-            sin_y = math.sin(angle_y)
-            rotation = (
-                (cos_y, sin_x * sin_y, cos_x * sin_y),
-                (0.0, cos_x, -sin_x),
-                (-sin_y, sin_x * cos_y, cos_x * cos_y),
-            )
+            rotation = rotation_matrix_xyz(19.0, -27.0, 0.0)
             transformed_vertices = transform_mesh(
                 vertices, rotation=rotation, translation=(13.5, -22.0, 8.0)
             )
@@ -927,6 +957,64 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(step_text.count("ADVANCED_FACE"), 7)
             self.assertEqual(step_text.count("PLANE("), 6)
             self.assertGreaterEqual(step_text.count("FACE_BOUND"), 3)
+
+    def test_prismatic_bore_variants_stay_clean(self):
+        cases = [
+            {
+                "name": "thin_plate",
+                "mesh_kwargs": {"half_size": 28.0, "radius": 4.5, "height": 8.0, "segments": 20},
+                "rotation": rotation_matrix_xyz(0.0, 0.0, 0.0),
+                "translation": (6.0, -9.0, 0.0),
+                "expected_advanced_faces": 11,
+                "expected_planes": 10,
+            },
+            {
+                "name": "horizontal_bore",
+                "mesh_kwargs": {"half_size": 22.0, "radius": 6.0, "height": 18.0, "segments": 18},
+                "rotation": rotation_matrix_xyz(0.0, 90.0, 0.0),
+                "translation": (-14.0, 5.0, 11.0),
+                "expected_advanced_faces": 11,
+                "expected_planes": 10,
+            },
+            {
+                "name": "oblique_thick_block",
+                "mesh_kwargs": {"half_size": 24.0, "radius": 9.5, "height": 32.0, "segments": 24},
+                "rotation": rotation_matrix_xyz(23.0, -31.0, 11.0),
+                "translation": (18.0, -12.0, 7.0),
+                "expected_advanced_faces": 7,
+                "expected_planes": 6,
+            },
+        ]
+
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = pathlib.Path(tmp)
+                    mesh_path = tmp_path / f"{case['name']}.stl"
+                    out_dir = tmp_path / "out"
+
+                    vertices, faces = box_with_round_bore_mesh(**case["mesh_kwargs"])
+                    transformed_vertices = transform_mesh(
+                        vertices,
+                        rotation=case["rotation"],
+                        translation=case["translation"],
+                    )
+                    write_ascii_stl(mesh_path, transformed_vertices, faces)
+                    _, report, _, _ = run_cli(mesh_path, out_dir)
+
+                    self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+                    self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+                    self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+                    step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+                    self.assertNotIn("FACETED_BREP", step_text)
+                    self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 1)
+                    self.assertGreaterEqual(step_text.count("CIRCLE("), 4)
+                    self.assertEqual(
+                        step_text.count("ADVANCED_FACE"), case["expected_advanced_faces"]
+                    )
+                    self.assertEqual(step_text.count("PLANE("), case["expected_planes"])
+                    self.assertGreaterEqual(step_text.count("FACE_BOUND"), 3)
 
     def test_generated_prismatic_voxel_cases_stay_clean(self):
         for case_name, case in PRISMATIC_VOXEL_CASES.items():
