@@ -441,6 +441,26 @@ struct SimplePrismaticMixedThroughFeatureExport {
   std::vector<int> outer_face_indices;
 };
 
+struct SimplePrismaticMixedThroughCounterboreFeature {
+  double top_inner_area {};
+  double bottom_inner_area {};
+  bool has_counterbore {};
+  double step_outer_area {};
+  double step_inner_area {};
+  SimpleCylinderPrimitive bore {};
+  SimpleCylinderPrimitive upper_bore {};
+  SimpleCylinderPrimitive lower_bore {};
+};
+
+struct SimplePrismaticMixedThroughCounterboreExport {
+  int top_face_index {};
+  int bottom_face_index {};
+  std::vector<int> top_outer_loop;
+  std::vector<int> bottom_outer_loop;
+  std::vector<SimplePrismaticMixedThroughCounterboreFeature> features;
+  std::vector<int> outer_face_indices;
+};
+
 struct SimplePrismaticMultiCounterbore {
   double top_inner_area {};
   double bottom_inner_area {};
@@ -5323,6 +5343,501 @@ detect_simple_prismatic_mixed_through_feature_export(const ReconstructionResult&
       export_result.features = std::move(features);
       export_result.outer_face_indices = std::move(outer_face_indices);
       return export_result;
+      }
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<SimplePrismaticMixedThroughCounterboreExport>
+detect_simple_prismatic_mixed_through_counterbore_export(const ReconstructionResult& reconstruction) {
+  if (reconstruction.faces.size() < 10 || reconstruction.vertices.size() < 32) {
+    return std::nullopt;
+  }
+
+  std::vector<int> cap_candidates;
+  std::vector<int> step_candidates;
+  for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
+    const ReconstructedFace& face = reconstruction.faces[face_index];
+    if (face.loops.size() >= 3) {
+      cap_candidates.push_back(static_cast<int>(face_index));
+    } else if (face.loops.size() == 2) {
+      step_candidates.push_back(static_cast<int>(face_index));
+    }
+  }
+  if (cap_candidates.size() < 2 || step_candidates.empty()) {
+    return std::nullopt;
+  }
+
+  for (std::size_t i = 0; i < cap_candidates.size(); ++i) {
+    for (std::size_t j = i + 1; j < cap_candidates.size(); ++j) {
+      const ReconstructedFace& face_a = reconstruction.faces[cap_candidates[i]];
+      const ReconstructedFace& face_b = reconstruction.faces[cap_candidates[j]];
+      if (angle_degrees_unsigned(face_a.fit.normal, face_b.fit.normal) > 8.0) {
+        continue;
+      }
+
+      const Vec3 centroid_axis = normalized(face_a.fit.centroid - face_b.fit.centroid);
+      if (length_squared(centroid_axis) <= 1e-12) {
+        continue;
+      }
+
+      for (const Vec3& axis : std::array<Vec3, 2> {centroid_axis, centroid_axis * -1.0}) {
+        const PlaneBasis axis_basis = basis_from_normal(axis);
+
+        const std::optional<ClassifiedFaceMultiLoops> loops_a =
+            classify_face_loops_outer_inner(face_a, reconstruction.vertices, axis_basis);
+        const std::optional<ClassifiedFaceMultiLoops> loops_b =
+            classify_face_loops_outer_inner(face_b, reconstruction.vertices, axis_basis);
+        if (!loops_a.has_value() || !loops_b.has_value()) {
+          continue;
+        }
+        if (loops_a->inner_loops.size() != loops_b->inner_loops.size() ||
+            loops_a->inner_loops.size() < 2) {
+          continue;
+        }
+
+        const double plane_a = dot(face_a.fit.centroid, axis);
+        const double plane_b = dot(face_b.fit.centroid, axis);
+        const bool a_is_top = plane_a >= plane_b;
+        const double top_plane = std::max(plane_a, plane_b);
+        const double bottom_plane = std::min(plane_a, plane_b);
+        const int top_face_index = a_is_top ? cap_candidates[i] : cap_candidates[j];
+        const int bottom_face_index = a_is_top ? cap_candidates[j] : cap_candidates[i];
+        const std::vector<int>& top_outer_loop = a_is_top ? loops_a->outer_loop : loops_b->outer_loop;
+        const std::vector<int>& bottom_outer_loop = a_is_top ? loops_b->outer_loop : loops_a->outer_loop;
+        const std::vector<std::vector<int>>& top_inner_loops =
+            a_is_top ? loops_a->inner_loops : loops_b->inner_loops;
+        const std::vector<std::vector<int>>& bottom_inner_loops =
+            a_is_top ? loops_b->inner_loops : loops_a->inner_loops;
+        const std::vector<double>& top_inner_areas =
+            a_is_top ? loops_a->inner_areas : loops_b->inner_areas;
+        const std::vector<double>& bottom_inner_areas =
+            a_is_top ? loops_b->inner_areas : loops_a->inner_areas;
+
+        struct LoopCircle {
+          std::size_t loop_index {};
+          CircleFit2D circle {};
+        };
+        std::vector<LoopCircle> fitted_top;
+        std::vector<LoopCircle> fitted_bottom;
+        fitted_top.reserve(top_inner_loops.size());
+        fitted_bottom.reserve(bottom_inner_loops.size());
+        bool fit_valid = true;
+        double max_top_radius = 0.0;
+        for (std::size_t loop_index = 0; loop_index < top_inner_loops.size(); ++loop_index) {
+          const std::optional<CircleFit2D> top_circle =
+              fit_circle_2d(project_loop_to_basis(top_inner_loops[loop_index], reconstruction.vertices, axis_basis));
+          const std::optional<CircleFit2D> bottom_circle = fit_circle_2d(
+              project_loop_to_basis(bottom_inner_loops[loop_index], reconstruction.vertices, axis_basis));
+          if (!top_circle.has_value() || !bottom_circle.has_value()) {
+            fit_valid = false;
+            break;
+          }
+          fitted_top.push_back({loop_index, *top_circle});
+          fitted_bottom.push_back({loop_index, *bottom_circle});
+          max_top_radius = std::max(max_top_radius, top_circle->radius);
+        }
+        if (!fit_valid || max_top_radius <= 1e-6) {
+          continue;
+        }
+
+        struct PendingFeature {
+          std::size_t top_loop_index {};
+          std::size_t bottom_loop_index {};
+          bool has_counterbore {};
+          CircleFit2D top_circle {};
+          CircleFit2D bottom_circle {};
+          std::size_t step_candidate_index {};
+          CircleFit2D step_outer_circle {};
+          CircleFit2D step_inner_circle {};
+          double step_outer_area {};
+          double step_inner_area {};
+          double step_plane {};
+          std::vector<int> step_outer_loop;
+          std::vector<int> step_inner_loop;
+        };
+
+        std::vector<bool> matched_bottom(fitted_bottom.size(), false);
+        std::vector<bool> matched_step(step_candidates.size(), false);
+        std::vector<PendingFeature> pending;
+        pending.reserve(fitted_top.size());
+        const double pair_tolerance = std::max(max_top_radius * 0.03, 1e-4);
+        bool saw_bore = false;
+        bool saw_counterbore = false;
+
+        for (const LoopCircle& top_loop : fitted_top) {
+          if (top_loop.circle.radius <= 1e-6 || top_loop.circle.max_error > pair_tolerance) {
+            fit_valid = false;
+            break;
+          }
+
+          std::size_t bottom_match = fitted_bottom.size();
+          double best_bottom_score = std::numeric_limits<double>::infinity();
+          for (std::size_t bottom_index = 0; bottom_index < fitted_bottom.size(); ++bottom_index) {
+            if (matched_bottom[bottom_index]) {
+              continue;
+            }
+            const LoopCircle& bottom_loop = fitted_bottom[bottom_index];
+            const Vec2 center_delta {top_loop.circle.center.x - bottom_loop.circle.center.x,
+                                     top_loop.circle.center.y - bottom_loop.circle.center.y};
+            const double center_distance =
+                std::sqrt(center_delta.x * center_delta.x + center_delta.y * center_delta.y);
+            if (bottom_loop.circle.max_error > pair_tolerance ||
+                bottom_loop.circle.radius > top_loop.circle.radius + pair_tolerance ||
+                center_distance > pair_tolerance) {
+              continue;
+            }
+            const double score =
+                center_distance + std::abs(top_loop.circle.radius - bottom_loop.circle.radius);
+            if (score < best_bottom_score) {
+              best_bottom_score = score;
+              bottom_match = bottom_index;
+            }
+          }
+          if (bottom_match == fitted_bottom.size()) {
+            fit_valid = false;
+            break;
+          }
+
+          matched_bottom[bottom_match] = true;
+          const LoopCircle& bottom_loop = fitted_bottom[bottom_match];
+          if (std::abs(top_loop.circle.radius - bottom_loop.circle.radius) <= pair_tolerance) {
+            saw_bore = true;
+            pending.push_back(PendingFeature {
+                top_loop.loop_index,
+                bottom_loop.loop_index,
+                false,
+                top_loop.circle,
+                bottom_loop.circle,
+                0,
+                CircleFit2D {},
+                CircleFit2D {},
+                0.0,
+                0.0,
+                0.0,
+                {},
+                {},
+            });
+            continue;
+          }
+
+          std::size_t step_match = step_candidates.size();
+          PendingFeature best_pending;
+          double best_step_score = std::numeric_limits<double>::infinity();
+          for (std::size_t step_index = 0; step_index < step_candidates.size(); ++step_index) {
+            if (matched_step[step_index]) {
+              continue;
+            }
+            const ReconstructedFace& step_face = reconstruction.faces[step_candidates[step_index]];
+            if (angle_degrees_unsigned(face_a.fit.normal, step_face.fit.normal) > 8.0) {
+              continue;
+            }
+            const double step_plane = dot(step_face.fit.centroid, axis);
+            if (step_plane >= top_plane - pair_tolerance ||
+                step_plane <= bottom_plane + pair_tolerance) {
+              continue;
+            }
+            const std::optional<ClassifiedFaceLoops> step_loops =
+                classify_face_loops_by_area(step_face, reconstruction.vertices, axis_basis);
+            if (!step_loops.has_value()) {
+              continue;
+            }
+            const auto& [step_outer_loop, step_inner_loop, step_outer_area, step_inner_area] = *step_loops;
+            const std::optional<CircleFit2D> step_outer_circle =
+                fit_circle_2d(project_loop_to_basis(step_outer_loop, reconstruction.vertices, axis_basis));
+            const std::optional<CircleFit2D> step_inner_circle =
+                fit_circle_2d(project_loop_to_basis(step_inner_loop, reconstruction.vertices, axis_basis));
+            if (!step_outer_circle.has_value() || !step_inner_circle.has_value()) {
+              continue;
+            }
+
+            const Vec2 outer_delta {top_loop.circle.center.x - step_outer_circle->center.x,
+                                    top_loop.circle.center.y - step_outer_circle->center.y};
+            const Vec2 inner_delta {bottom_loop.circle.center.x - step_inner_circle->center.x,
+                                    bottom_loop.circle.center.y - step_inner_circle->center.y};
+            const double outer_center_distance =
+                std::sqrt(outer_delta.x * outer_delta.x + outer_delta.y * outer_delta.y);
+            const double inner_center_distance =
+                std::sqrt(inner_delta.x * inner_delta.x + inner_delta.y * inner_delta.y);
+            if (std::abs(top_loop.circle.radius - step_outer_circle->radius) > pair_tolerance ||
+                std::abs(bottom_loop.circle.radius - step_inner_circle->radius) > pair_tolerance ||
+                step_outer_circle->max_error > pair_tolerance ||
+                step_inner_circle->max_error > pair_tolerance ||
+                outer_center_distance > pair_tolerance ||
+                inner_center_distance > pair_tolerance) {
+              continue;
+            }
+
+            const double score =
+                outer_center_distance + inner_center_distance +
+                std::abs(top_loop.circle.radius - step_outer_circle->radius) +
+                std::abs(bottom_loop.circle.radius - step_inner_circle->radius);
+            if (score < best_step_score) {
+              best_step_score = score;
+              best_pending = PendingFeature {
+                  top_loop.loop_index,
+                  bottom_loop.loop_index,
+                  true,
+                  top_loop.circle,
+                  bottom_loop.circle,
+                  step_index,
+                  *step_outer_circle,
+                  *step_inner_circle,
+                  step_outer_area,
+                  step_inner_area,
+                  step_plane,
+                  step_outer_loop,
+                  step_inner_loop,
+              };
+              step_match = step_index;
+            }
+          }
+          if (step_match == step_candidates.size()) {
+            fit_valid = false;
+            break;
+          }
+
+          matched_step[step_match] = true;
+          saw_counterbore = true;
+          pending.push_back(std::move(best_pending));
+        }
+        if (!fit_valid || pending.size() != fitted_top.size() || !saw_bore || !saw_counterbore) {
+          continue;
+        }
+
+        std::vector<int> outer_face_indices;
+        std::vector<int> bore_face_counts(pending.size(), 0);
+        std::vector<int> upper_face_counts(pending.size(), 0);
+        std::vector<int> lower_face_counts(pending.size(), 0);
+        bool valid = true;
+        for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
+          if (static_cast<int>(face_index) == top_face_index ||
+              static_cast<int>(face_index) == bottom_face_index) {
+            continue;
+          }
+
+          bool is_step = false;
+          for (const PendingFeature& feature : pending) {
+            if (feature.has_counterbore &&
+                static_cast<int>(face_index) == step_candidates[feature.step_candidate_index]) {
+              is_step = true;
+              break;
+            }
+          }
+          if (is_step) {
+            continue;
+          }
+
+          const ReconstructedFace& face = reconstruction.faces[face_index];
+          if (face.loops.size() != 1 || face.loops.front().size() < 4) {
+            valid = false;
+            break;
+          }
+
+          bool matched_feature = false;
+          for (std::size_t feature_index = 0; feature_index < pending.size(); ++feature_index) {
+            const PendingFeature& feature = pending[feature_index];
+            if (!feature.has_counterbore) {
+              std::unordered_set<int> bore_vertices;
+              bore_vertices.insert(top_inner_loops[feature.top_loop_index].begin(),
+                                   top_inner_loops[feature.top_loop_index].end());
+              bore_vertices.insert(bottom_inner_loops[feature.bottom_loop_index].begin(),
+                                   bottom_inner_loops[feature.bottom_loop_index].end());
+              bool all_bore = true;
+              for (int vertex_index : face.loops.front()) {
+                if (!bore_vertices.contains(vertex_index)) {
+                  all_bore = false;
+                  break;
+                }
+              }
+              if (!all_bore) {
+                continue;
+              }
+              int top_vertices = 0;
+              int bottom_vertices = 0;
+              for (int vertex_index : face.loops.front()) {
+                const double coordinate = dot(reconstruction.vertices[vertex_index], axis);
+                if (std::abs(coordinate - top_plane) <= pair_tolerance) {
+                  ++top_vertices;
+                } else if (std::abs(coordinate - bottom_plane) <= pair_tolerance) {
+                  ++bottom_vertices;
+                }
+              }
+              if (top_vertices == 2 && bottom_vertices == 2) {
+                ++bore_face_counts[feature_index];
+                matched_feature = true;
+                break;
+              }
+              valid = false;
+              break;
+            }
+
+            std::unordered_set<int> upper_vertices;
+            upper_vertices.insert(top_inner_loops[feature.top_loop_index].begin(),
+                                  top_inner_loops[feature.top_loop_index].end());
+            upper_vertices.insert(feature.step_outer_loop.begin(), feature.step_outer_loop.end());
+            std::unordered_set<int> lower_vertices;
+            lower_vertices.insert(feature.step_inner_loop.begin(), feature.step_inner_loop.end());
+            lower_vertices.insert(bottom_inner_loops[feature.bottom_loop_index].begin(),
+                                  bottom_inner_loops[feature.bottom_loop_index].end());
+
+            bool all_upper = true;
+            bool all_lower = true;
+            for (int vertex_index : face.loops.front()) {
+              if (!upper_vertices.contains(vertex_index)) {
+                all_upper = false;
+              }
+              if (!lower_vertices.contains(vertex_index)) {
+                all_lower = false;
+              }
+            }
+
+            if (all_upper) {
+              int top_vertices = 0;
+              int step_vertices = 0;
+              for (int vertex_index : face.loops.front()) {
+                const double coordinate = dot(reconstruction.vertices[vertex_index], axis);
+                if (std::abs(coordinate - top_plane) <= pair_tolerance) {
+                  ++top_vertices;
+                } else if (std::abs(coordinate - feature.step_plane) <= pair_tolerance) {
+                  ++step_vertices;
+                }
+              }
+              if (top_vertices == 2 && step_vertices == 2) {
+                ++upper_face_counts[feature_index];
+                matched_feature = true;
+                break;
+              }
+              valid = false;
+              break;
+            }
+
+            if (all_lower) {
+              int step_vertices = 0;
+              int bottom_vertices = 0;
+              for (int vertex_index : face.loops.front()) {
+                const double coordinate = dot(reconstruction.vertices[vertex_index], axis);
+                if (std::abs(coordinate - feature.step_plane) <= pair_tolerance) {
+                  ++step_vertices;
+                } else if (std::abs(coordinate - bottom_plane) <= pair_tolerance) {
+                  ++bottom_vertices;
+                }
+              }
+              if (step_vertices == 2 && bottom_vertices == 2) {
+                ++lower_face_counts[feature_index];
+                matched_feature = true;
+                break;
+              }
+              valid = false;
+              break;
+            }
+          }
+
+          if (!valid) {
+            break;
+          }
+          if (!matched_feature) {
+            outer_face_indices.push_back(static_cast<int>(face_index));
+          }
+        }
+        if (!valid || outer_face_indices.size() < 4) {
+          continue;
+        }
+
+        std::vector<SimplePrismaticMixedThroughCounterboreFeature> features;
+        features.reserve(pending.size());
+        for (std::size_t feature_index = 0; feature_index < pending.size(); ++feature_index) {
+          const PendingFeature& feature = pending[feature_index];
+          if (!feature.has_counterbore) {
+            if (bore_face_counts[feature_index] < 8) {
+              valid = false;
+              break;
+            }
+            const double radius = 0.5 * (feature.top_circle.radius + feature.bottom_circle.radius);
+            const Vec2 center {
+                0.5 * (feature.top_circle.center.x + feature.bottom_circle.center.x),
+                0.5 * (feature.top_circle.center.y + feature.bottom_circle.center.y),
+            };
+            const Vec3 axis_origin = axis_basis.u * center.x + axis_basis.v * center.y;
+            const Vec3 base_center = axis_origin + axis * bottom_plane;
+            const Vec3 seam_vector =
+                reconstruction.vertices[bottom_inner_loops[feature.bottom_loop_index].front()] - base_center;
+            const Vec3 radial = seam_vector - axis * dot(seam_vector, axis);
+            if (length_squared(radial) <= 1e-12) {
+              valid = false;
+              break;
+            }
+
+            SimplePrismaticMixedThroughCounterboreFeature exported;
+            exported.top_inner_area = top_inner_areas[feature.top_loop_index];
+            exported.bottom_inner_area = bottom_inner_areas[feature.bottom_loop_index];
+            exported.has_counterbore = false;
+            exported.bore =
+                SimpleCylinderPrimitive {base_center, axis, normalized(radial), radius, top_plane - bottom_plane};
+            features.push_back(std::move(exported));
+            continue;
+          }
+
+          if (upper_face_counts[feature_index] < 8 || lower_face_counts[feature_index] < 8) {
+            valid = false;
+            break;
+          }
+          const Vec2 center {
+              (feature.top_circle.center.x + feature.bottom_circle.center.x +
+               feature.step_outer_circle.center.x + feature.step_inner_circle.center.x) * 0.25,
+              (feature.top_circle.center.y + feature.bottom_circle.center.y +
+               feature.step_outer_circle.center.y + feature.step_inner_circle.center.y) * 0.25,
+          };
+          const Vec3 axis_origin = axis_basis.u * center.x + axis_basis.v * center.y;
+          const Vec3 upper_base_center = axis_origin + axis * feature.step_plane;
+          const Vec3 upper_seam_vector =
+              reconstruction.vertices[feature.step_outer_loop.front()] - upper_base_center;
+          const Vec3 upper_radial = upper_seam_vector - axis * dot(upper_seam_vector, axis);
+          const Vec3 lower_base_center = axis_origin + axis * bottom_plane;
+          const Vec3 lower_seam_vector =
+              reconstruction.vertices[bottom_inner_loops[feature.bottom_loop_index].front()] - lower_base_center;
+          const Vec3 lower_radial = lower_seam_vector - axis * dot(lower_seam_vector, axis);
+          if (length_squared(upper_radial) <= 1e-12 || length_squared(lower_radial) <= 1e-12) {
+            valid = false;
+            break;
+          }
+
+          SimplePrismaticMixedThroughCounterboreFeature exported;
+          exported.top_inner_area = top_inner_areas[feature.top_loop_index];
+          exported.bottom_inner_area = bottom_inner_areas[feature.bottom_loop_index];
+          exported.has_counterbore = true;
+          exported.step_outer_area = feature.step_outer_area;
+          exported.step_inner_area = feature.step_inner_area;
+          exported.upper_bore = SimpleCylinderPrimitive {
+              upper_base_center,
+              axis,
+              normalized(upper_radial),
+              feature.top_circle.radius,
+              top_plane - feature.step_plane,
+          };
+          exported.lower_bore = SimpleCylinderPrimitive {
+              lower_base_center,
+              axis,
+              normalized(lower_radial),
+              feature.bottom_circle.radius,
+              feature.step_plane - bottom_plane,
+          };
+          features.push_back(std::move(exported));
+        }
+        if (!valid) {
+          continue;
+        }
+
+        SimplePrismaticMixedThroughCounterboreExport export_result;
+        export_result.top_face_index = top_face_index;
+        export_result.bottom_face_index = bottom_face_index;
+        export_result.top_outer_loop = top_outer_loop;
+        export_result.bottom_outer_loop = bottom_outer_loop;
+        export_result.features = std::move(features);
+        export_result.outer_face_indices = std::move(outer_face_indices);
+        return export_result;
       }
     }
   }
@@ -14636,6 +15151,271 @@ bool write_step_file_prismatic_mixed_through_features(
   return true;
 }
 
+bool write_step_file_prismatic_mixed_through_counterbores(
+    const std::filesystem::path& path,
+    const ReconstructionResult& reconstruction,
+    const SimplePrismaticMixedThroughCounterboreExport& feature_export) {
+  StepBuilder step;
+  const StepExportContext context_ids = build_step_export_context(step);
+
+  std::vector<int> point_ids(reconstruction.vertices.size(), 0);
+  for (std::size_t index = 0; index < reconstruction.vertices.size(); ++index) {
+    const Vec3& vertex = reconstruction.vertices[index];
+    point_ids[index] = step.add("CARTESIAN_POINT('',(" + format_double(vertex.x) + "," +
+                                   format_double(vertex.y) + "," + format_double(vertex.z) + "))");
+  }
+
+  std::vector<int> vertex_point_ids(reconstruction.vertices.size(), 0);
+  for (std::size_t index = 0; index < reconstruction.vertices.size(); ++index) {
+    vertex_point_ids[index] = step.add("VERTEX_POINT(''," + step.ref(point_ids[index]) + ")");
+  }
+
+  std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_curve_ids;
+  auto get_line_edge_curve_id = [&](int from, int to) -> int {
+    const EdgeKey key = make_edge_key(from, to);
+    const auto found = edge_curve_ids.find(key);
+    if (found != edge_curve_ids.end()) {
+      return found->second;
+    }
+
+    const Vec3 start = reconstruction.vertices[key.a];
+    const Vec3 end = reconstruction.vertices[key.b];
+    const Vec3 delta = end - start;
+    const double edge_length = length(delta);
+    if (edge_length <= 1e-12) {
+      throw std::runtime_error("Cannot export zero-length STEP edge");
+    }
+
+    const Vec3 direction = normalized(delta);
+    const int direction_id =
+        step.add("DIRECTION('',(" + format_double(direction.x) + "," + format_double(direction.y) +
+                 "," + format_double(direction.z) + "))");
+    const int vector_id = step.add("VECTOR(''," + step.ref(direction_id) + "," +
+                                   format_double(edge_length) + ")");
+    const int line_id = step.add("LINE(''," + step.ref(point_ids[key.a]) + "," +
+                                 step.ref(vector_id) + ")");
+    const int edge_curve_id =
+        step.add("EDGE_CURVE(''," + step.ref(vertex_point_ids[key.a]) + "," +
+                 step.ref(vertex_point_ids[key.b]) + "," + step.ref(line_id) + ",.T.)");
+    edge_curve_ids.emplace(key, edge_curve_id);
+    return edge_curve_id;
+  };
+
+  auto add_line_loop = [&](const std::vector<int>& loop) -> int {
+    std::ostringstream edge_refs;
+    for (std::size_t index = 0; index < loop.size(); ++index) {
+      const int from = loop[index];
+      const int to = loop[(index + 1) % loop.size()];
+      const int edge_curve_id = get_line_edge_curve_id(from, to);
+      const EdgeKey key = make_edge_key(from, to);
+      const bool same_orientation = key.a == from && key.b == to;
+      const int oriented_edge_id =
+          step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
+                   std::string(same_orientation ? ".T." : ".F.") + ")");
+      if (index > 0) {
+        edge_refs << ",";
+      }
+      edge_refs << step.ref(oriented_edge_id);
+    }
+    return step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
+  };
+
+  std::vector<int> top_outer_loop = feature_export.top_outer_loop;
+  std::vector<int> bottom_outer_loop = feature_export.bottom_outer_loop;
+  const Vec3 axis = feature_export.features.front().has_counterbore
+                        ? feature_export.features.front().upper_bore.axis
+                        : feature_export.features.front().bore.axis;
+  const Vec3 ref_direction = feature_export.features.front().has_counterbore
+                                 ? feature_export.features.front().upper_bore.ref_direction
+                                 : feature_export.features.front().bore.ref_direction;
+  const PlaneBasis axis_basis = basis_from_normal(axis);
+  if (projected_loop_area(top_outer_loop, reconstruction.vertices, axis_basis) < 0.0) {
+    std::reverse(top_outer_loop.begin(), top_outer_loop.end());
+  }
+  if (projected_loop_area(bottom_outer_loop, reconstruction.vertices, axis_basis) > 0.0) {
+    std::reverse(bottom_outer_loop.begin(), bottom_outer_loop.end());
+  }
+
+  const Vec3 top_plane_origin = feature_export.features.front().has_counterbore
+                                    ? feature_export.features.front().upper_bore.base_center +
+                                          axis * feature_export.features.front().upper_bore.height
+                                    : feature_export.features.front().bore.base_center +
+                                          axis * feature_export.features.front().bore.height;
+  const Vec3 bottom_plane_origin = feature_export.features.front().has_counterbore
+                                       ? feature_export.features.front().lower_bore.base_center
+                                       : feature_export.features.front().bore.base_center;
+  const StepPlaneSurface top_plane =
+      add_step_plane_surface(step, top_plane_origin, axis, ref_direction);
+  const StepPlaneSurface bottom_plane =
+      add_step_plane_surface(step, bottom_plane_origin, axis, ref_direction);
+
+  struct FeatureBundle {
+    int top_edge_curve {};
+    int bottom_edge_curve {};
+    std::vector<int> shell_faces;
+  };
+
+  std::vector<FeatureBundle> bundles;
+  bundles.reserve(feature_export.features.size());
+  for (const SimplePrismaticMixedThroughCounterboreFeature& feature : feature_export.features) {
+    if (!feature.has_counterbore) {
+      const StepCylinderBundle bore_bundle =
+          add_step_cylinder_bundle(step, context_ids, feature.bore, top_plane, bottom_plane);
+      FeatureBundle bundle;
+      bundle.top_edge_curve = bore_bundle.top_edge_curve;
+      bundle.bottom_edge_curve = bore_bundle.bottom_edge_curve;
+      bundle.shell_faces = {bore_bundle.lateral_face};
+      bundles.push_back(std::move(bundle));
+      continue;
+    }
+
+    const Vec3 step_center = feature.upper_bore.base_center;
+    const StepPlaneSurface step_plane =
+        add_step_plane_surface(step, step_center, axis, ref_direction);
+    const StepCylinderBundle upper_bundle =
+        add_step_cylinder_bundle(step, context_ids, feature.upper_bore, top_plane, step_plane);
+    const StepCylinderBundle lower_bundle =
+        add_step_cylinder_bundle(step, context_ids, feature.lower_bore, step_plane, bottom_plane);
+
+    const bool step_outer_circle_forward = feature.step_outer_area > 0.0;
+    const int step_outer_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(upper_bundle.bottom_edge_curve) + "," +
+                 std::string(step_outer_circle_forward ? ".T." : ".F.") + ")");
+    const int step_outer_loop = step.add("EDGE_LOOP('',(" + step.ref(step_outer_oriented) + "))");
+    const int step_outer_bound =
+        step.add("FACE_OUTER_BOUND(''," + step.ref(step_outer_loop) + ",.T.)");
+
+    const bool step_inner_circle_forward = feature.step_inner_area > 0.0;
+    const int step_inner_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(lower_bundle.top_edge_curve) + "," +
+                 std::string(step_inner_circle_forward ? ".T." : ".F.") + ")");
+    const int step_inner_loop = step.add("EDGE_LOOP('',(" + step.ref(step_inner_oriented) + "))");
+    const int step_inner_bound =
+        step.add("FACE_BOUND(''," + step.ref(step_inner_loop) + ",.T.)");
+    const int step_face = step.add("ADVANCED_FACE('',(" + step.ref(step_outer_bound) + "," +
+                                   step.ref(step_inner_bound) + ")," +
+                                   step.ref(step_plane.plane_id) + ",.T.)");
+
+    FeatureBundle bundle;
+    bundle.top_edge_curve = upper_bundle.top_edge_curve;
+    bundle.bottom_edge_curve = lower_bundle.bottom_edge_curve;
+    bundle.shell_faces = {step_face, upper_bundle.lateral_face, lower_bundle.lateral_face};
+    bundles.push_back(std::move(bundle));
+  }
+
+  const int top_outer_loop_id = add_line_loop(top_outer_loop);
+  std::vector<int> top_bound_ids;
+  top_bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(top_outer_loop_id) + ",.T.)"));
+  for (std::size_t index = 0; index < feature_export.features.size(); ++index) {
+    const bool top_circle_forward = feature_export.features[index].top_inner_area > 0.0;
+    const int top_inner_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(bundles[index].top_edge_curve) + "," +
+                 std::string(top_circle_forward ? ".T." : ".F.") + ")");
+    const int top_inner_loop = step.add("EDGE_LOOP('',(" + step.ref(top_inner_oriented) + "))");
+    top_bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(top_inner_loop) + ",.T.)"));
+  }
+  std::ostringstream top_bound_refs;
+  for (std::size_t index = 0; index < top_bound_ids.size(); ++index) {
+    if (index > 0) {
+      top_bound_refs << ",";
+    }
+    top_bound_refs << step.ref(top_bound_ids[index]);
+  }
+  const int top_face = step.add("ADVANCED_FACE('',(" + top_bound_refs.str() + ")," +
+                                step.ref(top_plane.plane_id) + ",.T.)");
+
+  const int bottom_outer_loop_id = add_line_loop(bottom_outer_loop);
+  std::vector<int> bottom_bound_ids;
+  bottom_bound_ids.push_back(
+      step.add("FACE_OUTER_BOUND(''," + step.ref(bottom_outer_loop_id) + ",.T.)"));
+  for (std::size_t index = 0; index < feature_export.features.size(); ++index) {
+    const bool bottom_circle_forward = feature_export.features[index].bottom_inner_area > 0.0;
+    const int bottom_inner_oriented =
+        step.add("ORIENTED_EDGE('',*,*," + step.ref(bundles[index].bottom_edge_curve) + "," +
+                 std::string(bottom_circle_forward ? ".T." : ".F.") + ")");
+    const int bottom_inner_loop =
+        step.add("EDGE_LOOP('',(" + step.ref(bottom_inner_oriented) + "))");
+    bottom_bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(bottom_inner_loop) + ",.T.)"));
+  }
+  std::ostringstream bottom_bound_refs;
+  for (std::size_t index = 0; index < bottom_bound_ids.size(); ++index) {
+    if (index > 0) {
+      bottom_bound_refs << ",";
+    }
+    bottom_bound_refs << step.ref(bottom_bound_ids[index]);
+  }
+  const int bottom_face = step.add("ADVANCED_FACE('',(" + bottom_bound_refs.str() + ")," +
+                                   step.ref(bottom_plane.plane_id) + ",.F.)");
+
+  std::vector<int> side_face_ids;
+  side_face_ids.reserve(feature_export.outer_face_indices.size());
+  for (int face_index : feature_export.outer_face_indices) {
+    const ReconstructedFace& face = reconstruction.faces[face_index];
+    const int plane_origin = step.add("CARTESIAN_POINT('',(" + format_double(face.fit.centroid.x) + "," +
+                                   format_double(face.fit.centroid.y) + "," +
+                                   format_double(face.fit.centroid.z) + "))");
+    const int face_normal = step.add("DIRECTION('',(" + format_double(face.fit.normal.x) + "," +
+                                   format_double(face.fit.normal.y) + "," +
+                                   format_double(face.fit.normal.z) + "))");
+    const PlaneBasis basis = basis_from_normal(face.fit.normal);
+    const int face_ref = step.add("DIRECTION('',(" + format_double(basis.u.x) + "," +
+                                format_double(basis.u.y) + "," + format_double(basis.u.z) + "))");
+    const int face_axis = step.add("AXIS2_PLACEMENT_3D(''," + step.ref(plane_origin) + "," +
+                                   step.ref(face_normal) + "," + step.ref(face_ref) + ")");
+    const int plane = step.add("PLANE(''," + step.ref(face_axis) + ")");
+
+    std::vector<int> bound_ids;
+    bound_ids.reserve(face.loops.size());
+    for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
+      const int edge_loop = add_line_loop(face.loops[loop_index]);
+      if (loop_index == 0) {
+        bound_ids.push_back(step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
+      } else {
+        bound_ids.push_back(step.add("FACE_BOUND(''," + step.ref(edge_loop) + ",.T.)"));
+      }
+    }
+
+    std::ostringstream bound_refs;
+    for (std::size_t index = 0; index < bound_ids.size(); ++index) {
+      if (index > 0) {
+        bound_refs << ",";
+      }
+      bound_refs << step.ref(bound_ids[index]);
+    }
+    side_face_ids.push_back(
+        step.add("ADVANCED_FACE('',(" + bound_refs.str() + ")," + step.ref(plane) + ",.T.)"));
+  }
+
+  std::ostringstream shell_faces;
+  shell_faces << step.ref(top_face) << "," << step.ref(bottom_face);
+  for (const FeatureBundle& bundle : bundles) {
+    for (int face_id : bundle.shell_faces) {
+      shell_faces << "," << step.ref(face_id);
+    }
+  }
+  for (int face_id : side_face_ids) {
+    shell_faces << "," << step.ref(face_id);
+  }
+  const int closed_shell = step.add("CLOSED_SHELL('',(" + shell_faces.str() + "))");
+  const int manifold_solid_brep =
+      step.add("MANIFOLD_SOLID_BREP('mesh2solid'," + step.ref(closed_shell) + ")");
+  const int shape_representation =
+      step.add("ADVANCED_BREP_SHAPE_REPRESENTATION('',(" + step.ref(manifold_solid_brep) + "," +
+               step.ref(context_ids.global_axis) + ")," + step.ref(context_ids.context) + ")");
+  step.add("SHAPE_DEFINITION_REPRESENTATION(" + step.ref(context_ids.product_shape) + "," +
+           step.ref(shape_representation) + ")");
+
+  std::ofstream output(path);
+  if (!output) {
+    throw std::runtime_error("Unable to write STEP file: " + path.string());
+  }
+  output << step_header();
+  output << step.emit();
+  output << "ENDSEC;\n";
+  output << "END-ISO-10303-21;\n";
+  return true;
+}
+
 bool write_step_file_prismatic_multi_counterbore(
     const std::filesystem::path& path,
     const ReconstructionResult& reconstruction,
@@ -15592,6 +16372,13 @@ bool write_step_file(const std::filesystem::path& path,
           detect_simple_prismatic_multi_counterbore_export(reconstruction);
       multi_counterbore.has_value()) {
     return write_step_file_prismatic_multi_counterbore(path, reconstruction, *multi_counterbore);
+  }
+
+  if (const std::optional<SimplePrismaticMixedThroughCounterboreExport> mixed_through_counterbores =
+          detect_simple_prismatic_mixed_through_counterbore_export(reconstruction);
+      mixed_through_counterbores.has_value()) {
+    return write_step_file_prismatic_mixed_through_counterbores(
+        path, reconstruction, *mixed_through_counterbores);
   }
 
   if (const std::optional<SimplePrismaticMixedThroughFeatureExport> mixed_through_features =

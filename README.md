@@ -167,7 +167,7 @@ bosses with concentric through-holes, plus repeated multi-blind-bore, repeated m
 pocket patterns, obround through-slots with analytic half-cylinders, and benchmark-derived
 planar bodies whose faceted circular through-holes are upgraded to analytic cylinders at STEP export,
 including bodies with multiple distinct cap-face pairs in the same part, mixed through-bore plus
-countersink blocks, mixed blind cylindrical features on more complex planar supports, and mixed
+counterbore and countersink blocks, mixed blind cylindrical features on more complex planar supports, and mixed
 planar bodies whose faceted extruded side-profile
 bands are upgraded to smooth STEP faces, using exact cylinders when the recovered profile is circular
 and B-spline faces otherwise, including cap-pair bands that are not aligned to the world Z axis.
