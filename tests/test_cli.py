@@ -2211,6 +2211,7 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
             self.assertGreaterEqual(step_text.count("CYLINDRICAL_SURFACE"), 9)
             self.assertGreaterEqual(step_text.count("CIRCLE("), 20)
+            self.assertLessEqual(step_text.count("ADVANCED_FACE"), 100)
             self.assertLess(step_text.count("ADVANCED_FACE"), report["reconstruction"]["face_count"])
 
     def test_xy_nema_bracket_benchmark_upgrades_multiple_holes_to_cylinders(self):

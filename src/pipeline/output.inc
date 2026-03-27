@@ -496,6 +496,134 @@ std::uint64_t make_face_loop_key(int face_index, std::size_t loop_index) {
          static_cast<std::uint64_t>(loop_index);
 }
 
+std::optional<std::size_t> outer_loop_index_from_areas(const std::vector<double>& areas);
+
+struct CylinderShellFaceMatch {
+  int top_vertices {};
+  int bottom_vertices {};
+  int intermediate_vertices {};
+};
+
+std::optional<CylinderShellFaceMatch> match_face_to_cylinder_shell(
+    const ReconstructedFace& face,
+    const std::vector<Vec3>& vertices,
+    const Vec3& axis_origin,
+    const Vec3& axis,
+    double radius,
+    double bottom_plane,
+    double top_plane,
+    double tolerance) {
+  if (face.loops.size() != 1 || face.loops.front().size() < 3) {
+    return std::nullopt;
+  }
+
+  CylinderShellFaceMatch match;
+  std::unordered_set<int> unique_vertices;
+  for (int vertex_index : face.loops.front()) {
+    unique_vertices.insert(vertex_index);
+  }
+
+  for (int vertex_index : unique_vertices) {
+    const Vec3& point = vertices[vertex_index];
+    const double coordinate = dot(point, axis);
+    if (coordinate < bottom_plane - tolerance || coordinate > top_plane + tolerance) {
+      return std::nullopt;
+    }
+
+    const Vec3 center_point = axis_origin + axis * coordinate;
+    const double radial_distance = length(point - center_point);
+    if (std::abs(radial_distance - radius) > tolerance) {
+      return std::nullopt;
+    }
+
+    if (std::abs(coordinate - top_plane) <= tolerance) {
+      ++match.top_vertices;
+    } else if (std::abs(coordinate - bottom_plane) <= tolerance) {
+      ++match.bottom_vertices;
+    } else {
+      ++match.intermediate_vertices;
+    }
+  }
+
+  const int strata =
+      (match.top_vertices > 0 ? 1 : 0) + (match.bottom_vertices > 0 ? 1 : 0) +
+      (match.intermediate_vertices > 0 ? 1 : 0);
+  if (strata < 2) {
+    return std::nullopt;
+  }
+
+  return match;
+}
+
+bool has_intermediate_matching_circular_section(const ReconstructionResult& reconstruction,
+                                                int top_face_index,
+                                                int bottom_face_index,
+                                                const Vec3& axis,
+                                                const PlaneBasis& axis_basis,
+                                                double top_plane,
+                                                double bottom_plane,
+                                                const Vec2& center,
+                                                double radius,
+                                                double tolerance) {
+  for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
+    if (static_cast<int>(face_index) == top_face_index ||
+        static_cast<int>(face_index) == bottom_face_index) {
+      continue;
+    }
+
+    const ReconstructedFace& face = reconstruction.faces[face_index];
+    if (angle_degrees_unsigned(face.fit.normal, axis) > 8.0) {
+      continue;
+    }
+
+    const double plane = dot(face.fit.centroid, axis);
+    if (plane >= top_plane - tolerance || plane <= bottom_plane + tolerance) {
+      continue;
+    }
+
+    auto loop_matches = [&](const std::vector<int>& loop) -> bool {
+      if (loop.size() < 8) {
+        return false;
+      }
+      const std::optional<CircleFit2D> circle =
+          fit_circle_2d(project_loop_to_basis(loop, reconstruction.vertices, axis_basis));
+      if (!circle.has_value()) {
+        return false;
+      }
+      const double circle_tolerance = std::max((circle->radius + radius) * 0.015, 1e-4);
+      const Vec2 center_delta {circle->center.x - center.x, circle->center.y - center.y};
+      return std::abs(circle->radius - radius) <= circle_tolerance &&
+             circle->max_error <= std::max(circle->radius * 0.03, 1e-4) &&
+             std::sqrt(center_delta.x * center_delta.x + center_delta.y * center_delta.y) <=
+                 circle_tolerance;
+    };
+
+    if (face.loops.size() == 1) {
+      if (loop_matches(face.loops.front())) {
+        return true;
+      }
+      continue;
+    }
+
+    const std::vector<double> areas =
+        projected_face_loop_areas(face, reconstruction.vertices, axis_basis);
+    const std::optional<std::size_t> outer_loop_index = outer_loop_index_from_areas(areas);
+    if (!outer_loop_index.has_value()) {
+      continue;
+    }
+    for (std::size_t loop_index = 0; loop_index < face.loops.size(); ++loop_index) {
+      if (loop_index == *outer_loop_index) {
+        continue;
+      }
+      if (loop_matches(face.loops[loop_index])) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 std::optional<std::size_t> outer_loop_index_from_areas(const std::vector<double>& areas) {
   if (areas.empty()) {
     return std::nullopt;
@@ -3777,12 +3905,14 @@ std::optional<GenericCylindricalThroughHoleExport> detect_generic_cylindrical_th
         }
 
         const IndexedCircleLoop& bottom_loop = bottom_loops[best_bottom_index];
-        std::unordered_set<int> hole_vertices;
-        hole_vertices.insert(top_loop.loop.begin(), top_loop.loop.end());
-        hole_vertices.insert(bottom_loop.loop.begin(), bottom_loop.loop.end());
-
+        const Vec2 center {
+            0.5 * (top_loop.circle.center.x + bottom_loop.circle.center.x),
+            0.5 * (top_loop.circle.center.y + bottom_loop.circle.center.y),
+        };
         std::vector<int> side_face_indices;
         side_face_indices.reserve(top_loop.loop.size());
+        const Vec3 axis_origin = axis_basis.u * center.x + axis_basis.v * center.y;
+        const double radius = 0.5 * (top_loop.circle.radius + bottom_loop.circle.radius);
         for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
           if (static_cast<int>(face_index) == top_face_index ||
               static_cast<int>(face_index) == bottom_face_index ||
@@ -3798,31 +3928,16 @@ std::optional<GenericCylindricalThroughHoleExport> detect_generic_cylindrical_th
             continue;
           }
 
-          bool all_hole_vertices = true;
-          for (int vertex_index : face.loops.front()) {
-            if (!hole_vertices.contains(vertex_index)) {
-              all_hole_vertices = false;
-              break;
-            }
-          }
-          if (!all_hole_vertices) {
-            continue;
-          }
-
-          int top_vertices = 0;
-          int bottom_vertices = 0;
-          int intermediate_vertices = 0;
-          for (int vertex_index : face.loops.front()) {
-            const double coordinate = dot(reconstruction.vertices[vertex_index], axis);
-            if (std::abs(coordinate - top_plane) <= matched_tolerance) {
-              ++top_vertices;
-            } else if (std::abs(coordinate - bottom_plane) <= matched_tolerance) {
-              ++bottom_vertices;
-            } else {
-              ++intermediate_vertices;
-            }
-          }
-          if (top_vertices < 2 || bottom_vertices < 2 || intermediate_vertices != 0) {
+          const std::optional<CylinderShellFaceMatch> shell_match = match_face_to_cylinder_shell(
+              face,
+              reconstruction.vertices,
+              axis_origin,
+              axis,
+              radius,
+              bottom_plane,
+              top_plane,
+              matched_tolerance);
+          if (!shell_match.has_value()) {
             continue;
           }
 
@@ -3833,15 +3948,21 @@ std::optional<GenericCylindricalThroughHoleExport> detect_generic_cylindrical_th
           continue;
         }
 
+        if (has_intermediate_matching_circular_section(reconstruction,
+                                                       top_face_index,
+                                                       bottom_face_index,
+                                                       axis,
+                                                       axis_basis,
+                                                       top_plane,
+                                                       bottom_plane,
+                                                       center,
+                                                       radius,
+                                                       matched_tolerance)) {
+          continue;
+        }
+
         matched_bottom[best_bottom_index] = true;
         used_side_faces.insert(side_face_indices.begin(), side_face_indices.end());
-
-        const double radius = 0.5 * (top_loop.circle.radius + bottom_loop.circle.radius);
-        const Vec2 center {
-            0.5 * (top_loop.circle.center.x + bottom_loop.circle.center.x),
-            0.5 * (top_loop.circle.center.y + bottom_loop.circle.center.y),
-        };
-        const Vec3 axis_origin = axis_basis.u * center.x + axis_basis.v * center.y;
         const Vec3 base_center = axis_origin + axis * bottom_plane;
         const Vec3 seam_vector =
             reconstruction.vertices[bottom_loop.loop.front()] - base_center;
@@ -4021,12 +4142,17 @@ std::optional<GenericCylindricalBlindFeatureExport> detect_generic_cylindrical_b
           continue;
         }
 
-        std::unordered_set<int> cylinder_vertices;
-        cylinder_vertices.insert(support_loop.loop.begin(), support_loop.loop.end());
-        cylinder_vertices.insert(cap_loop.begin(), cap_loop.end());
-
         std::vector<int> side_face_indices;
         side_face_indices.reserve(support_loop.loop.size());
+        const bool support_is_top = support_plane > cap_plane;
+        const double top_plane = std::max(support_plane, cap_plane);
+        const double bottom_plane = std::min(support_plane, cap_plane);
+        const double radius = 0.5 * (support_loop.circle.radius + cap_circle->radius);
+        const Vec2 center {
+            0.5 * (support_loop.circle.center.x + cap_circle->center.x),
+            0.5 * (support_loop.circle.center.y + cap_circle->center.y),
+        };
+        const Vec3 axis_origin = axis_basis.u * center.x + axis_basis.v * center.y;
         for (std::size_t face_index = 0; face_index < reconstruction.faces.size(); ++face_index) {
           if (static_cast<int>(face_index) == support_face_index ||
               static_cast<int>(face_index) == cap_face_index) {
@@ -4041,31 +4167,16 @@ std::optional<GenericCylindricalBlindFeatureExport> detect_generic_cylindrical_b
             continue;
           }
 
-          bool all_cylinder_vertices = true;
-          for (int vertex_index : face.loops.front()) {
-            if (!cylinder_vertices.contains(vertex_index)) {
-              all_cylinder_vertices = false;
-              break;
-            }
-          }
-          if (!all_cylinder_vertices) {
-            continue;
-          }
-
-          int support_vertices = 0;
-          int cap_vertices = 0;
-          int intermediate_vertices = 0;
-          for (int vertex_index : face.loops.front()) {
-            const double coordinate = dot(reconstruction.vertices[vertex_index], axis);
-            if (std::abs(coordinate - support_plane) <= match_tolerance) {
-              ++support_vertices;
-            } else if (std::abs(coordinate - cap_plane) <= match_tolerance) {
-              ++cap_vertices;
-            } else {
-              ++intermediate_vertices;
-            }
-          }
-          if (support_vertices < 2 || cap_vertices < 2 || intermediate_vertices != 0) {
+          const std::optional<CylinderShellFaceMatch> shell_match = match_face_to_cylinder_shell(
+              face,
+              reconstruction.vertices,
+              axis_origin,
+              axis,
+              radius,
+              bottom_plane,
+              top_plane,
+              match_tolerance);
+          if (!shell_match.has_value()) {
             continue;
           }
 
@@ -4076,15 +4187,6 @@ std::optional<GenericCylindricalBlindFeatureExport> detect_generic_cylindrical_b
           continue;
         }
 
-        const bool support_is_top = support_plane > cap_plane;
-        const double top_plane = std::max(support_plane, cap_plane);
-        const double bottom_plane = std::min(support_plane, cap_plane);
-        const double radius = 0.5 * (support_loop.circle.radius + cap_circle->radius);
-        const Vec2 center {
-            0.5 * (support_loop.circle.center.x + cap_circle->center.x),
-            0.5 * (support_loop.circle.center.y + cap_circle->center.y),
-        };
-        const Vec3 axis_origin = axis_basis.u * center.x + axis_basis.v * center.y;
         const Vec3 base_center = axis_origin + axis * bottom_plane;
         const std::vector<int>& bottom_loop = support_is_top ? cap_loop : support_loop.loop;
         const Vec3 seam_vector = reconstruction.vertices[bottom_loop.front()] - base_center;
