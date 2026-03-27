@@ -153,8 +153,8 @@ The test suite also generates a deterministic prismatic corpus at runtime, cover
 blocks, L-brackets, channels, disconnected box assemblies, cross-shaped solids, multi-item
 3MF box assemblies, and prismatic blocks with analytic cylindrical through-bores, including
 rotated off-axis, off-center, and varied aspect-ratio cases, plus blind cylindrical pockets,
-simple counterbores, cylindrical bosses/posts, and standoff-style tubular bosses with
-concentric through-holes.
+blind counterbores, simple counterbores, cylindrical bosses/posts, and standoff-style tubular
+bosses with concentric through-holes.
 
 Beyond that tight golden set, `examples/README.md` documents a broader public benchmark corpus
 with upstream STL and 3MF models. Those smoke tests intentionally keep separate expectation
