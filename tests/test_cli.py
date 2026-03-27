@@ -2733,6 +2733,36 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(step_text.count("PLANE("), 6)
             self.assertGreaterEqual(step_text.count("FACE_BOUND"), 4)
 
+    def test_rotated_two_countersinks_stay_clean(self):
+        angle = math.radians(18.0)
+        rotation = (
+            (math.cos(angle), -math.sin(angle), 0.0),
+            (math.sin(angle), math.cos(angle), 0.0),
+            (0.0, 0.0, 1.0),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "rotated_two_countersinks.stl"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = block_with_two_countersinks_mesh()
+            vertices = transform_mesh(vertices, rotation=rotation)
+            write_ascii_stl(mesh_path, vertices, faces)
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertEqual(step_text.count("CONICAL_SURFACE"), 2)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 2)
+            self.assertEqual(step_text.count("B_SPLINE_SURFACE_WITH_KNOTS"), 0)
+            self.assertEqual(step_text.count("B_SPLINE_CURVE_WITH_KNOTS"), 0)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 10)
+            self.assertEqual(step_text.count("PLANE("), 6)
+
     def test_prismatic_block_with_two_counterbores_exports_clean_cylinders(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)
