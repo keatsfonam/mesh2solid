@@ -242,6 +242,172 @@ def box_with_round_bore_mesh(
     return vertices, faces
 
 
+def block_with_two_round_bores_mesh(
+    half_size=24.0,
+    radius=5.0,
+    offset=10.0,
+    height=18.0,
+    segments=16,
+):
+    if segments % 4 != 0:
+        raise ValueError("segments must be divisible by 4")
+
+    vertices = []
+    vertex_ids = {}
+    faces = []
+
+    def vertex_id(point):
+        key = tuple(round(value, 8) for value in point)
+        if key not in vertex_ids:
+            vertex_ids[key] = len(vertices)
+            vertices.append(tuple(float(value) for value in point))
+        return vertex_ids[key]
+
+    def circle_point(center_x, angle, z):
+        return vertex_id((center_x + radius * math.cos(angle), radius * math.sin(angle), z))
+
+    def add_strip(left_ids, right_ids, top=True):
+        for index in range(len(left_ids) - 1):
+            a0 = left_ids[index]
+            a1 = left_ids[index + 1]
+            b0 = right_ids[index]
+            b1 = right_ids[index + 1]
+            if top:
+                faces.append((a0, b0, b1))
+                faces.append((a0, b1, a1))
+            else:
+                faces.append((a0, b1, b0))
+                faces.append((a0, a1, b1))
+
+    half_step = segments // 4
+    right_half_angles = [
+        math.pi / 2.0 - math.pi * index / (2.0 * half_step)
+        for index in range(2 * half_step + 1)
+    ]
+    left_half_angles = [
+        math.pi / 2.0 + math.pi * index / (2.0 * half_step)
+        for index in range(2 * half_step + 1)
+    ]
+
+    top_left_out = [circle_point(-offset, angle, height) for angle in left_half_angles]
+    top_left_in = [circle_point(-offset, angle, height) for angle in right_half_angles]
+    top_right_in = [circle_point(offset, angle, height) for angle in left_half_angles]
+    top_right_out = [circle_point(offset, angle, height) for angle in right_half_angles]
+
+    bottom_left_out = [circle_point(-offset, angle, 0.0) for angle in left_half_angles]
+    bottom_left_in = [circle_point(-offset, angle, 0.0) for angle in right_half_angles]
+    bottom_right_in = [circle_point(offset, angle, 0.0) for angle in left_half_angles]
+    bottom_right_out = [circle_point(offset, angle, 0.0) for angle in right_half_angles]
+
+    left_square_top = [
+        vertex_id((-half_size, radius * math.sin(angle), height)) for angle in left_half_angles
+    ]
+    right_square_top = [
+        vertex_id((half_size, radius * math.sin(angle), height)) for angle in right_half_angles
+    ]
+    left_square_bottom = [
+        vertex_id((-half_size, radius * math.sin(angle), 0.0)) for angle in left_half_angles
+    ]
+    right_square_bottom = [
+        vertex_id((half_size, radius * math.sin(angle), 0.0)) for angle in right_half_angles
+    ]
+
+    top_lt = vertex_id((-half_size, half_size, height))
+    top_lm = vertex_id((-offset, half_size, height))
+    top_rm = vertex_id((offset, half_size, height))
+    top_rt = vertex_id((half_size, half_size, height))
+    top_rb = vertex_id((half_size, -half_size, height))
+    top_rmb = vertex_id((offset, -half_size, height))
+    top_lmb = vertex_id((-offset, -half_size, height))
+    top_lb = vertex_id((-half_size, -half_size, height))
+    bottom_lt = vertex_id((-half_size, half_size, 0.0))
+    bottom_lm = vertex_id((-offset, half_size, 0.0))
+    bottom_rm = vertex_id((offset, half_size, 0.0))
+    bottom_rt = vertex_id((half_size, half_size, 0.0))
+    bottom_rb = vertex_id((half_size, -half_size, 0.0))
+    bottom_rmb = vertex_id((offset, -half_size, 0.0))
+    bottom_lmb = vertex_id((-offset, -half_size, 0.0))
+    bottom_lb = vertex_id((-half_size, -half_size, 0.0))
+
+    faces.extend(
+        [
+            (top_lt, top_lm, left_square_top[0]),
+            (top_lm, top_left_in[0], left_square_top[0]),
+            (top_lm, top_rm, top_right_in[0]),
+            (top_lm, top_right_in[0], top_left_in[0]),
+            (top_rm, top_rt, right_square_top[0]),
+            (top_rm, right_square_top[0], top_right_in[0]),
+            (left_square_top[-1], top_lmb, top_lb),
+            (left_square_top[-1], top_left_in[-1], top_lmb),
+            (top_left_in[-1], top_right_in[-1], top_rmb),
+            (top_left_in[-1], top_rmb, top_lmb),
+            (top_right_in[-1], right_square_top[-1], top_rb),
+            (top_right_in[-1], top_rb, top_rmb),
+        ]
+    )
+    add_strip(left_square_top, top_left_out, top=True)
+    add_strip(top_left_in, top_right_in, top=True)
+    add_strip(top_right_out, right_square_top, top=True)
+
+    faces.extend(
+        [
+            (bottom_lt, left_square_bottom[0], bottom_left_in[0]),
+            (bottom_lt, bottom_left_in[0], bottom_lm),
+            (bottom_lm, bottom_left_in[0], bottom_right_in[0]),
+            (bottom_lm, bottom_right_in[0], bottom_rm),
+            (bottom_rm, bottom_right_in[0], right_square_bottom[0]),
+            (bottom_rm, right_square_bottom[0], bottom_rt),
+            (left_square_bottom[-1], bottom_lb, bottom_lmb),
+            (left_square_bottom[-1], bottom_lmb, bottom_left_in[-1]),
+            (bottom_left_in[-1], bottom_lmb, bottom_rmb),
+            (bottom_left_in[-1], bottom_rmb, bottom_right_in[-1]),
+            (bottom_right_in[-1], bottom_rmb, bottom_rb),
+            (bottom_right_in[-1], bottom_rb, right_square_bottom[-1]),
+        ]
+    )
+    add_strip(left_square_bottom, bottom_left_out, top=False)
+    add_strip(bottom_left_in, bottom_right_in, top=False)
+    add_strip(bottom_right_out, right_square_bottom, top=False)
+
+    left_face_bottom = [bottom_lt] + left_square_bottom + [bottom_lb]
+    left_face_top = [top_lt] + left_square_top + [top_lb]
+    add_strip(left_face_bottom, left_face_top, top=True)
+
+    right_face_bottom = [bottom_rt] + right_square_bottom + [bottom_rb]
+    right_face_top = [top_rt] + right_square_top + [top_rb]
+    add_strip(right_face_top, right_face_bottom, top=True)
+
+    front_bottom = [bottom_lt, bottom_lm, bottom_rm, bottom_rt]
+    front_top = [top_lt, top_lm, top_rm, top_rt]
+    add_strip(front_bottom, front_top, top=True)
+
+    back_bottom = [bottom_rb, bottom_rmb, bottom_lmb, bottom_lb]
+    back_top = [top_rb, top_rmb, top_lmb, top_lb]
+    add_strip(back_top, back_bottom, top=True)
+
+    def full_circle(angle_list_a, angle_list_b, center_x, z):
+        full_angles = [
+            2.0 * math.pi * index / segments for index in range(segments)
+        ]
+        return [circle_point(center_x, angle, z) for angle in full_angles]
+
+    top_left_circle = full_circle(left_half_angles, right_half_angles, -offset, height)
+    bottom_left_circle = full_circle(left_half_angles, right_half_angles, -offset, 0.0)
+    top_right_circle = full_circle(left_half_angles, right_half_angles, offset, height)
+    bottom_right_circle = full_circle(left_half_angles, right_half_angles, offset, 0.0)
+
+    for top_loop, bottom_loop in (
+        (top_left_circle, bottom_left_circle),
+        (top_right_circle, bottom_right_circle),
+    ):
+        for index in range(len(top_loop)):
+            next_index = (index + 1) % len(top_loop)
+            faces.append((bottom_loop[index], top_loop[next_index], bottom_loop[next_index]))
+            faces.append((bottom_loop[index], top_loop[index], top_loop[next_index]))
+
+    return vertices, faces
+
+
 def obround_slot_support(angle, half_span, radius):
     direction_x = math.cos(angle)
     direction_y = math.sin(angle)
@@ -1387,6 +1553,28 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(step_text.count("ADVANCED_FACE"), 7)
             self.assertEqual(step_text.count("PLANE("), 6)
             self.assertGreaterEqual(step_text.count("FACE_BOUND"), 3)
+
+    def test_prismatic_block_with_two_round_bores_exports_clean_cylinders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            mesh_path = tmp_path / "box_with_two_bores.stl"
+            out_dir = tmp_path / "out"
+
+            vertices, faces = block_with_two_round_bores_mesh()
+            write_ascii_stl(mesh_path, vertices, faces)
+            _, report, _, _ = run_cli(mesh_path, out_dir)
+
+            self.assertEqual(report["reconstruction"]["outcome"], "solid_created")
+            self.assertEqual(report["reconstruction"]["open_edge_count"], 0)
+            self.assertEqual(report["reconstruction"]["non_manifold_edge_count"], 0)
+
+            step_text = (out_dir / "reconstruction.step").read_text(encoding="utf-8")
+            self.assertNotIn("FACETED_BREP", step_text)
+            self.assertEqual(step_text.count("CYLINDRICAL_SURFACE"), 2)
+            self.assertGreaterEqual(step_text.count("CIRCLE("), 8)
+            self.assertEqual(step_text.count("ADVANCED_FACE"), 8)
+            self.assertEqual(step_text.count("PLANE("), 6)
+            self.assertGreaterEqual(step_text.count("FACE_BOUND"), 5)
 
     def test_prismatic_block_with_obround_slot_has_deterministic_baseline(self):
         with tempfile.TemporaryDirectory() as tmp:
