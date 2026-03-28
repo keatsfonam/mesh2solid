@@ -222,6 +222,10 @@ MESH2SOLID_BIN=/path/to/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 benchmarks/ru
   - current checkpoint and target geometry-first rebuild plan
   - canonical planar / prismatic sweep / revolved / blend / fallback branches
   - incremental migration strategy away from feature-by-feature exporters
+
+Current implementation checkpoint:
+- the shared-cap prismatic through-feature family now routes through a canonical axial section model
+- single bores, repeated bores, countersinks, counterbores, and mixed shared-cap through features share one analytic writer
 - `src/main.cpp`
   - CLI surface
 - `include/mesh2solid/pipeline.h`

@@ -8,11 +8,11 @@ AxialThroughFeatureBundle add_axial_countersink_feature_bundle(
     StepLineLoopWriter& writer,
     const StepPlaneSurface& top_plane,
     const StepPlaneSurface& bottom_plane,
-    const SimplePrismaticAxialThroughFeature& feature) {
+    const PrismaticAxialSectionColumn& column) {
   StepBuilder& step = writer.step;
   const StepExportContext& context_ids = writer.context_ids;
-  const SimpleConicalFrustumPrimitive& countersink = feature.countersink;
-  const SimpleCylinderPrimitive& bore = feature.bore;
+  const SimpleConicalFrustumPrimitive& countersink = column.countersink;
+  const SimpleCylinderPrimitive& bore = column.bore;
   const Vec3 top_center = countersink.base_center + countersink.axis * countersink.height;
   const Vec3 step_center = countersink.base_center;
   const Vec3 bottom_center = bore.base_center;
@@ -252,16 +252,16 @@ AxialThroughFeatureBundle add_axial_countersink_feature_bundle(
   };
 }
 
-AxialThroughFeatureBundle add_axial_through_feature_bundle(
+AxialThroughFeatureBundle add_prismatic_axial_section_column_bundle(
     StepLineLoopWriter& writer,
     const StepPlaneSurface& top_plane,
     const StepPlaneSurface& bottom_plane,
     const Vec3& axis,
     const Vec3& ref_direction,
-    const SimplePrismaticAxialThroughFeature& feature) {
-  if (feature.kind == PrismaticAxialThroughFeatureKind::bore) {
+    const PrismaticAxialSectionColumn& column) {
+  if (column.kind == PrismaticAxialThroughFeatureKind::bore) {
     const StepCylinderBundle bore_bundle = add_step_cylinder_bundle(
-        writer.step, writer.context_ids, feature.bore, top_plane, bottom_plane);
+        writer.step, writer.context_ids, column.bore, top_plane, bottom_plane);
     return AxialThroughFeatureBundle {
         bore_bundle.top_edge_curve,
         bore_bundle.bottom_edge_curve,
@@ -269,19 +269,19 @@ AxialThroughFeatureBundle add_axial_through_feature_bundle(
     };
   }
 
-  if (feature.kind == PrismaticAxialThroughFeatureKind::countersink) {
-    return add_axial_countersink_feature_bundle(writer, top_plane, bottom_plane, feature);
+  if (column.kind == PrismaticAxialThroughFeatureKind::countersink) {
+    return add_axial_countersink_feature_bundle(writer, top_plane, bottom_plane, column);
   }
 
-  const Vec3 step_center = feature.upper_bore.base_center;
+  const Vec3 step_center = column.upper_bore.base_center;
   const StepPlaneSurface step_plane =
       add_step_plane_surface(writer.step, step_center, axis, ref_direction);
   const StepCylinderBundle upper_bundle = add_step_cylinder_bundle(
-      writer.step, writer.context_ids, feature.upper_bore, top_plane, step_plane);
+      writer.step, writer.context_ids, column.upper_bore, top_plane, step_plane);
   const StepCylinderBundle lower_bundle = add_step_cylinder_bundle(
-      writer.step, writer.context_ids, feature.lower_bore, step_plane, bottom_plane);
+      writer.step, writer.context_ids, column.lower_bore, step_plane, bottom_plane);
 
-  const bool step_outer_circle_forward = feature.step_outer_area > 0.0;
+  const bool step_outer_circle_forward = column.step_outer_area > 0.0;
   const int step_outer_oriented =
       writer.step.add("ORIENTED_EDGE('',*,*," + writer.step.ref(upper_bundle.bottom_edge_curve) +
                       "," + std::string(step_outer_circle_forward ? ".T." : ".F.") + ")");
@@ -290,7 +290,7 @@ AxialThroughFeatureBundle add_axial_through_feature_bundle(
   const int step_outer_bound =
       writer.step.add("FACE_OUTER_BOUND(''," + writer.step.ref(step_outer_loop) + ",.T.)");
 
-  const bool step_inner_circle_forward = feature.step_inner_area > 0.0;
+  const bool step_inner_circle_forward = column.step_inner_area > 0.0;
   const int step_inner_oriented =
       writer.step.add("ORIENTED_EDGE('',*,*," + writer.step.ref(lower_bundle.top_edge_curve) +
                       "," + std::string(step_inner_circle_forward ? ".T." : ".F.") + ")");
@@ -309,17 +309,17 @@ AxialThroughFeatureBundle add_axial_through_feature_bundle(
   };
 }
 
-bool write_step_file_prismatic_axial_through_features(
+bool write_step_file_prismatic_axial_section_model(
     const std::filesystem::path& path,
     const ReconstructionResult& reconstruction,
-    const SimplePrismaticAxialThroughFeatureExport& feature_export) {
+    const PrismaticAxialSectionModel& section_model) {
   StepBuilder step;
   const StepExportContext context_ids = build_step_export_context(step);
   StepLineLoopWriter writer(step, context_ids, reconstruction);
 
-  std::vector<int> top_outer_loop = feature_export.top_outer_loop;
-  std::vector<int> bottom_outer_loop = feature_export.bottom_outer_loop;
-  const SimplePrismaticAxialThroughFeature& reference_feature = feature_export.features.front();
+  std::vector<int> top_outer_loop = section_model.top_outer_loop;
+  std::vector<int> bottom_outer_loop = section_model.bottom_outer_loop;
+  const PrismaticAxialSectionColumn& reference_feature = section_model.features.front();
   const Vec3 axis = reference_feature.kind == PrismaticAxialThroughFeatureKind::counterbore
                         ? reference_feature.upper_bore.axis
                         : reference_feature.bore.axis;
@@ -354,17 +354,18 @@ bool write_step_file_prismatic_axial_through_features(
       add_step_plane_surface(step, bottom_plane_origin, axis, ref_direction);
 
   std::vector<AxialThroughFeatureBundle> bundles;
-  bundles.reserve(feature_export.features.size());
-  for (const SimplePrismaticAxialThroughFeature& feature : feature_export.features) {
+  bundles.reserve(section_model.features.size());
+  for (const PrismaticAxialSectionColumn& feature : section_model.features) {
     bundles.push_back(
-        add_axial_through_feature_bundle(writer, top_plane, bottom_plane, axis, ref_direction, feature));
+        add_prismatic_axial_section_column_bundle(
+            writer, top_plane, bottom_plane, axis, ref_direction, feature));
   }
 
   const int top_outer_loop_id = writer.add_line_loop(top_outer_loop);
   std::vector<int> top_edge_loops;
   top_edge_loops.push_back(top_outer_loop_id);
-  for (std::size_t index = 0; index < feature_export.features.size(); ++index) {
-    const bool top_circle_forward = feature_export.features[index].top_inner_area > 0.0;
+  for (std::size_t index = 0; index < section_model.features.size(); ++index) {
+    const bool top_circle_forward = section_model.features[index].top_inner_area > 0.0;
     const int top_inner_oriented =
         step.add("ORIENTED_EDGE('',*,*," + step.ref(bundles[index].top_edge_curve) + "," +
                  std::string(top_circle_forward ? ".T." : ".F.") + ")");
@@ -377,8 +378,8 @@ bool write_step_file_prismatic_axial_through_features(
   const int bottom_outer_loop_id = writer.add_line_loop(bottom_outer_loop);
   std::vector<int> bottom_edge_loops;
   bottom_edge_loops.push_back(bottom_outer_loop_id);
-  for (std::size_t index = 0; index < feature_export.features.size(); ++index) {
-    const bool bottom_circle_forward = feature_export.features[index].bottom_inner_area > 0.0;
+  for (std::size_t index = 0; index < section_model.features.size(); ++index) {
+    const bool bottom_circle_forward = section_model.features[index].bottom_inner_area > 0.0;
     const int bottom_inner_oriented =
         step.add("ORIENTED_EDGE('',*,*," + step.ref(bundles[index].bottom_edge_curve) + "," +
                  std::string(bottom_circle_forward ? ".T." : ".F.") + ")");
@@ -390,8 +391,8 @@ bool write_step_file_prismatic_axial_through_features(
       step, bottom_plane.plane_id, bottom_edge_loops, 0, false);
 
   std::vector<int> side_face_ids;
-  side_face_ids.reserve(feature_export.outer_face_indices.size());
-  for (int face_index : feature_export.outer_face_indices) {
+  side_face_ids.reserve(section_model.outer_face_indices.size());
+  for (int face_index : section_model.outer_face_indices) {
     const ReconstructedFace& face = reconstruction.faces[face_index];
     const int plane_origin =
         step.add("CARTESIAN_POINT('',(" + format_double(face.fit.centroid.x) + "," +

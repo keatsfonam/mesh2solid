@@ -408,8 +408,10 @@ struct SimplePrismaticCountersinkExport {
   std::vector<int> outer_face_indices;
 };
 
-// Shared-cap axial through features all reduce to the same 2.5D model:
-// paired cap loops plus an axial radius profile that is constant, stepped, or tapered.
+// Phase-1 canonical prismatic section model:
+// shared-cap axial features all reduce to the same 2.5D description:
+// paired cap loops plus one or more feature columns whose radius profile is
+// constant, stepped, or tapered along the shared axis.
 enum class PrismaticAxialThroughFeatureKind {
   bore,
   countersink,
@@ -436,6 +438,9 @@ struct SimplePrismaticAxialThroughFeatureExport {
   std::vector<SimplePrismaticAxialThroughFeature> features;
   std::vector<int> outer_face_indices;
 };
+
+using PrismaticAxialSectionColumn = SimplePrismaticAxialThroughFeature;
+using PrismaticAxialSectionModel = SimplePrismaticAxialThroughFeatureExport;
 
 struct SimplePrismaticBossExport {
   int base_face_index {};
@@ -7363,18 +7368,13 @@ StepSmoothBandBundle add_step_smooth_band_bundle(StepBuilder& step,
 
 #include "output_cylinder_solids.inc"
 
-#include "output_bores.inc"
-
 #include "output_blind_features.inc"
 
 #include "output_supports.inc"
 
-#include "output_counterbore.inc"
-
-#include "output_countersink.inc"
-
 #include "output_step_loop.inc"
 #include "output_axial.inc"
+#include "output_prismatic_sections.inc"
 #include "output_cylindrical.inc"
 #include "output_obround.inc"
 
@@ -7454,44 +7454,31 @@ bool write_step_file(const std::filesystem::path& path,
     return write_step_file_prismatic_boss(path, reconstruction, *boss);
   }
 
-  if (const std::optional<SimplePrismaticCounterboreExport> counterbore =
-          detect_simple_prismatic_counterbore_export(reconstruction);
-      counterbore.has_value()) {
-    return write_step_file_prismatic_counterbore(path, reconstruction, *counterbore);
+  const std::optional<GenericCylindricalFeatureExport> generic_features =
+      merge_generic_cylindrical_feature_exports(
+          detect_generic_cylindrical_through_hole_export(reconstruction),
+          detect_generic_cylindrical_blind_feature_export(reconstruction),
+          detect_generic_smooth_extruded_band_export(reconstruction));
+  const bool generic_features_cover_nontrivial_side_geometry =
+      generic_features.has_value() &&
+      (!generic_features->blind_features.empty() || !generic_features->smooth_bands.empty());
+
+  if (!generic_features_cover_nontrivial_side_geometry) {
+    if (const std::optional<PrismaticAxialSectionModel> axial_sections =
+            detect_prismatic_axial_section_model(reconstruction);
+        axial_sections.has_value()) {
+      return write_step_file_prismatic_axial_section_model(path, reconstruction, *axial_sections);
+    }
   }
 
-  if (const std::optional<SimplePrismaticCountersinkExport> countersink =
-          detect_simple_prismatic_countersink_export(reconstruction);
-      countersink.has_value()) {
-    return write_step_file_prismatic_countersink(path, reconstruction, *countersink);
-  }
-
-  if (const std::optional<SimplePrismaticAxialThroughFeatureExport> axial_through_features =
-          detect_simple_prismatic_axial_through_feature_export(reconstruction);
-      axial_through_features.has_value()) {
-    return write_step_file_prismatic_axial_through_features(
-        path, reconstruction, *axial_through_features);
-  }
-
-  if (const std::optional<GenericCylindricalFeatureExport> generic_features =
-          merge_generic_cylindrical_feature_exports(
-              detect_generic_cylindrical_through_hole_export(reconstruction),
-              detect_generic_cylindrical_blind_feature_export(reconstruction),
-              detect_generic_smooth_extruded_band_export(reconstruction));
-      generic_features.has_value()) {
+  if (generic_features.has_value()) {
     return write_step_file_generic_cylindrical_features(path, reconstruction, *generic_features);
   }
 
-  if (const std::optional<SimplePrismaticMultiBoreExport> multi_bore =
-          detect_simple_prismatic_multi_bore_export(reconstruction);
-      multi_bore.has_value()) {
-    return write_step_file_prismatic_multi_bore(path, reconstruction, *multi_bore);
-  }
-
-  if (const std::optional<SimplePrismaticBoreExport> bore =
-          detect_simple_prismatic_bore_export(reconstruction);
-      bore.has_value()) {
-    return write_step_file_prismatic_bore(path, reconstruction, *bore);
+  if (const std::optional<PrismaticAxialSectionModel> axial_sections =
+          detect_prismatic_axial_section_model(reconstruction);
+      axial_sections.has_value()) {
+    return write_step_file_prismatic_axial_section_model(path, reconstruction, *axial_sections);
   }
 
   return write_step_file_generic_planar(path, reconstruction);
