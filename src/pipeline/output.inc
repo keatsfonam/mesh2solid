@@ -583,6 +583,12 @@ struct GenericSmoothExtrudedBandExport {
   std::vector<GenericSmoothExtrudedBand> bands;
 };
 
+using PrismaticProfileSweepBand = GenericSmoothExtrudedBand;
+
+struct PrismaticProfileSweepBandExport {
+  std::vector<PrismaticProfileSweepBand> bands;
+};
+
 struct GenericCylindricalFeatureExport {
   std::vector<GenericCylindricalThroughHole> holes;
   std::vector<GenericCylindricalBlindFeature> blind_features;
@@ -7401,6 +7407,7 @@ StepSmoothBandBundle add_step_smooth_band_bundle(StepBuilder& step,
 #include "output_prismatic_sections.inc"
 #include "output_prismatic_blind_sections.inc"
 #include "output_prismatic_support_sections.inc"
+#include "output_profile_sweeps.inc"
 #include "output_cylindrical.inc"
 #include "output_obround.inc"
 
@@ -7438,11 +7445,23 @@ bool write_step_file(const std::filesystem::path& path,
     return write_step_file_prismatic_support_section_model(path, reconstruction, *support_sections);
   }
 
+  const std::optional<GenericCylindricalThroughHoleExport> generic_holes =
+      detect_generic_cylindrical_through_hole_export(reconstruction);
+  const std::optional<GenericCylindricalBlindFeatureExport> generic_blind_features =
+      detect_generic_cylindrical_blind_feature_export(reconstruction);
+  const std::optional<GenericSmoothExtrudedBandExport> generic_smooth_bands =
+      detect_generic_smooth_extruded_band_export(reconstruction);
+
+  if (!generic_holes.has_value() && !generic_blind_features.has_value()) {
+    if (const std::optional<PrismaticProfileSweepBandExport> profile_sweep_bands =
+            detect_prismatic_profile_sweep_band_export(generic_smooth_bands);
+        profile_sweep_bands.has_value()) {
+      return write_step_file_prismatic_profile_sweep_bands(path, reconstruction, *profile_sweep_bands);
+    }
+  }
+
   const std::optional<GenericCylindricalFeatureExport> generic_features =
-      merge_generic_cylindrical_feature_exports(
-          detect_generic_cylindrical_through_hole_export(reconstruction),
-          detect_generic_cylindrical_blind_feature_export(reconstruction),
-          detect_generic_smooth_extruded_band_export(reconstruction));
+      merge_generic_cylindrical_feature_exports(generic_holes, generic_blind_features, generic_smooth_bands);
   const bool generic_features_cover_nontrivial_side_geometry =
       generic_features.has_value() &&
       (!generic_features->blind_features.empty() || !generic_features->smooth_bands.empty());

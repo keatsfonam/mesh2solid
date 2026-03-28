@@ -228,6 +228,7 @@ Current implementation checkpoint:
 - single bores, repeated bores, countersinks, counterbores, and mixed shared-cap through features share one analytic writer
 - blind bores, blind counterbores, blind countersinks, and their repeated variants now share a canonical blind-section model and writer
 - bosses, repeated bosses, and standoffs now share a canonical support-section model and writer
+- smooth extruded cap-pair side bands now route through a canonical profile-sweep band writer, and mixed cylindrical bodies reuse the same loop-subsequence replacement primitive when analytic sweep edges are stitched back into planar caps
 - `src/main.cpp`
   - CLI surface
 - `include/mesh2solid/pipeline.h`

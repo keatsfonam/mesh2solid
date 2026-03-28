@@ -6,84 +6,6 @@ bool write_step_file_generic_cylindrical_features(
   const StepExportContext context_ids = build_step_export_context(step);
   StepLineLoopWriter writer(step, context_ids, reconstruction);
 
-  struct LoopCurveReplacement {
-    LoopSubsequenceMatch match;
-    int edge_curve_id {};
-  };
-
-  auto add_loop_with_replacements = [&](const std::vector<int>& loop,
-                                        const std::vector<LoopCurveReplacement>& replacements) -> int {
-    if (loop.size() < 2 || replacements.empty()) {
-      return writer.add_line_loop(loop);
-    }
-
-    std::unordered_map<std::size_t, std::size_t> replacement_by_start;
-    std::vector<bool> covered(loop.size(), false);
-    for (std::size_t replacement_index = 0; replacement_index < replacements.size();
-         ++replacement_index) {
-      const LoopCurveReplacement& replacement = replacements[replacement_index];
-      if (replacement.match.span == 0 || replacement.match.span >= loop.size()) {
-        return writer.add_line_loop(loop);
-      }
-      if (!replacement_by_start.emplace(replacement.match.start, replacement_index).second) {
-        return writer.add_line_loop(loop);
-      }
-      for (std::size_t offset = 0; offset < replacement.match.span; ++offset) {
-        const std::size_t edge_slot = (replacement.match.start + offset) % loop.size();
-        if (covered[edge_slot]) {
-          return writer.add_line_loop(loop);
-        }
-        covered[edge_slot] = true;
-      }
-    }
-
-    std::ostringstream edge_refs;
-    bool first_edge = true;
-    const auto append_oriented_edge = [&](int curve_id, bool same_orientation) {
-      if (!first_edge) {
-        edge_refs << ",";
-      }
-      first_edge = false;
-      edge_refs << step.ref(
-          step.add("ORIENTED_EDGE('',*,*," + step.ref(curve_id) + "," +
-                   std::string(same_orientation ? ".T." : ".F.") + ")"));
-    };
-
-    std::size_t edge_index = 0;
-    bool found_start = false;
-    for (std::size_t candidate = 0; candidate < loop.size(); ++candidate) {
-      if (!covered[candidate]) {
-        edge_index = candidate;
-        found_start = true;
-        break;
-      }
-    }
-    if (!found_start) {
-      edge_index = replacements.front().match.start % loop.size();
-    }
-
-    std::size_t processed_edges = 0;
-    while (processed_edges < loop.size()) {
-      const auto replacement_found = replacement_by_start.find(edge_index);
-      if (replacement_found != replacement_by_start.end()) {
-        const LoopCurveReplacement& replacement = replacements[replacement_found->second];
-        append_oriented_edge(replacement.edge_curve_id, replacement.match.forward);
-        edge_index = (edge_index + replacement.match.span) % loop.size();
-        processed_edges += replacement.match.span;
-        continue;
-      }
-
-      const int from = loop[edge_index];
-      const int to = loop[(edge_index + 1) % loop.size()];
-      const int line_edge_curve_id = writer.line_edge_curve_id(from, to);
-      const EdgeKey key = make_edge_key(from, to);
-      append_oriented_edge(line_edge_curve_id, key.a == from && key.b == to);
-      edge_index = (edge_index + 1) % loop.size();
-      processed_edges += 1;
-    }
-    return step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
-  };
-
   std::unordered_map<int, StepPlaneSurface> face_planes;
   auto get_face_plane = [&](int face_index) -> const StepPlaneSurface& {
     const auto found = face_planes.find(face_index);
@@ -236,12 +158,12 @@ bool write_step_file_generic_cylindrical_features(
       const auto smooth_band_ref =
           smooth_band_loop_refs.find(make_face_loop_key(face_index_int, loop_index));
       if (smooth_band_ref != smooth_band_loop_refs.end()) {
-        std::vector<LoopCurveReplacement> replacements;
+        std::vector<StepLoopCurveReplacement> replacements;
         replacements.reserve(smooth_band_ref->second.size());
         for (const SmoothBandLoopRef& loop_ref : smooth_band_ref->second) {
           const GenericSmoothExtrudedBand& band = feature_export.smooth_bands[loop_ref.band_index];
           const StepSmoothBandBundle& bundle = smooth_band_bundles[loop_ref.band_index];
-          replacements.push_back(LoopCurveReplacement {
+          replacements.push_back(StepLoopCurveReplacement {
               LoopSubsequenceMatch {
                   loop_ref.is_top ? band.top_loop_start : band.bottom_loop_start,
                   loop_ref.is_top ? band.top_loop_span : band.bottom_loop_span,
@@ -250,7 +172,8 @@ bool write_step_file_generic_cylindrical_features(
               loop_ref.is_top ? bundle.top_edge_curve : bundle.bottom_edge_curve,
           });
         }
-        const int edge_loop = add_loop_with_replacements(face.loops[loop_index], replacements);
+        const int edge_loop =
+            add_step_loop_with_curve_replacements(step, writer, face.loops[loop_index], replacements);
         edge_loop_ids.push_back(edge_loop);
         continue;
       }

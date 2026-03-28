@@ -184,6 +184,13 @@ Checkpoint:
 Move extruded profile bands, obround slots, and fillet-like extruded arcs onto
 the same “recover 2D profile curves, then sweep them” foundation.
 
+Checkpoint:
+
+- pure smooth extruded side-band cases now route through a canonical
+  profile-sweep band writer
+- mixed cylindrical bodies reuse the same loop-subsequence replacement
+  primitive when they splice analytic profile-sweep edges into planar caps
+
 ### Phase 4: Blend And Revolved Expansion
 
 Add higher-level treatment for:
