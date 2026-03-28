@@ -218,6 +218,10 @@ MESH2SOLID_BIN=/path/to/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 benchmarks/ru
   - reconstruction
   - faceted fallback selection
   - STEP and JSON emission
+- `docs/architecture-v2.md`
+  - current checkpoint and target geometry-first rebuild plan
+  - canonical planar / prismatic sweep / revolved / blend / fallback branches
+  - incremental migration strategy away from feature-by-feature exporters
 - `src/main.cpp`
   - CLI surface
 - `include/mesh2solid/pipeline.h`
