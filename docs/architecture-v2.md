@@ -192,6 +192,8 @@ Checkpoint:
   primitive when they splice analytic profile-sweep edges into planar caps
 - obround-slot export now shares the common synthetic profile-loop STEP helper
   layer instead of carrying a fully standalone loop/edge writer
+- obround slots now route through an explicit profile-sweep slot model in
+  detection and dispatch instead of a generically named one-off export case
 
 ### Phase 4: Blend And Revolved Expansion
 

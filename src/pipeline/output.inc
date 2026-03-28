@@ -510,7 +510,7 @@ struct PrismaticSupportSectionModel {
   std::vector<int> outer_face_indices;
 };
 
-struct SimplePrismaticObroundSlotExport {
+struct PrismaticProfileSweepObroundSlotModel {
   int top_face_index {};
   int bottom_face_index {};
   std::vector<int> top_outer_loop;
@@ -1960,7 +1960,7 @@ std::optional<SimplePrismaticStandoffExport> detect_simple_prismatic_standoff_ex
   return std::nullopt;
 }
 
-std::optional<SimplePrismaticObroundSlotExport> detect_simple_prismatic_obround_slot_export(
+std::optional<PrismaticProfileSweepObroundSlotModel> detect_prismatic_profile_sweep_obround_slot_model(
     const ReconstructionResult& reconstruction) {
   if (reconstruction.faces.size() < 10 || reconstruction.vertices.size() < 16) {
     return std::nullopt;
@@ -2126,7 +2126,7 @@ std::optional<SimplePrismaticObroundSlotExport> detect_simple_prismatic_obround_
           0.5 * (fit_a->center.y + fit_b->center.y),
       };
 
-      SimplePrismaticObroundSlotExport slot;
+      PrismaticProfileSweepObroundSlotModel slot;
       slot.top_face_index = top_face_index;
       slot.bottom_face_index = bottom_face_index;
       slot.top_outer_loop = top_outer_loop;
@@ -7433,10 +7433,11 @@ bool write_step_file(const std::filesystem::path& path,
     return write_step_file_prismatic_blind_section_model(path, reconstruction, *blind_sections);
   }
 
-  if (const std::optional<SimplePrismaticObroundSlotExport> obround_slot =
-          detect_simple_prismatic_obround_slot_export(reconstruction);
+  if (const std::optional<PrismaticProfileSweepObroundSlotModel> obround_slot =
+          detect_prismatic_profile_sweep_obround_slot_model(reconstruction);
       obround_slot.has_value()) {
-    return write_step_file_prismatic_obround_slot(path, reconstruction, *obround_slot);
+    return write_step_file_prismatic_profile_sweep_obround_slot_model(
+        path, reconstruction, *obround_slot);
   }
 
   if (const std::optional<PrismaticSupportSectionModel> support_sections =

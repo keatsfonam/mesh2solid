@@ -1,6 +1,7 @@
-bool write_step_file_prismatic_obround_slot(const std::filesystem::path& path,
-                                            const ReconstructionResult& reconstruction,
-                                            const SimplePrismaticObroundSlotExport& slot) {
+bool write_step_file_prismatic_profile_sweep_obround_slot_model(
+    const std::filesystem::path& path,
+    const ReconstructionResult& reconstruction,
+    const PrismaticProfileSweepObroundSlotModel& slot) {
   StepBuilder step;
   const StepExportContext context_ids = build_step_export_context(step);
 

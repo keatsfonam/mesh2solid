@@ -18,7 +18,7 @@ Fragment layout:
 - `output_prismatic_support_sections.inc`: adapters and STEP writer for canonical boss, multi-boss, and standoff support features
 - `output_profile_sweeps.inc`: canonical profile-sweep band STEP writer for smooth extruded side walls
 - `output_cylindrical.inc`: mixed cylindrical-feature STEP writers
-- `output_obround.inc`: obround-slot STEP writer
+- `output_obround.inc`: profile-sweep obround-slot model writer
 - `output_fallback_step.inc`: generic planar STEP fallback writer used when no analytic export family matches
 - `output_reporting.inc`: STL emission plus JSON/debug/report serialization helpers
 
