@@ -105,6 +105,31 @@ class StepLineLoopWriter {
   std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_curve_ids;
 };
 
+class StepPlaneSurfaceCache {
+ public:
+  StepPlaneSurfaceCache(StepBuilder& builder, const ReconstructionResult& mesh)
+      : step(builder), reconstruction(mesh) {}
+
+  const StepPlaneSurface& get(int face_index) {
+    const auto found = face_planes.find(face_index);
+    if (found != face_planes.end()) {
+      return found->second;
+    }
+
+    const ReconstructedFace& face = reconstruction.faces[face_index];
+    const PlaneBasis basis = basis_from_normal(face.fit.normal);
+    return face_planes
+        .emplace(face_index,
+                 add_step_plane_surface(step, face.fit.centroid, face.fit.normal, basis.u))
+        .first->second;
+  }
+
+ private:
+  StepBuilder& step;
+  const ReconstructionResult& reconstruction;
+  std::unordered_map<int, StepPlaneSurface> face_planes;
+};
+
 struct StepSyntheticVertexInfo {
   int point_id {};
   int vertex_id {};
@@ -318,6 +343,38 @@ int add_step_face_from_single_outer_loop(StepBuilder& step,
   const int bound_id = step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop_id) + ",.T.)");
   return step.add("ADVANCED_FACE('',(" + step.ref(bound_id) + ")," + step.ref(surface_id) + "," +
                   std::string(same_sense ? ".T." : ".F.") + ")");
+}
+
+void add_step_manifold_solid_representation(StepBuilder& step,
+                                            const StepExportContext& context_ids,
+                                            const std::vector<int>& face_ids) {
+  std::ostringstream shell_faces;
+  for (std::size_t index = 0; index < face_ids.size(); ++index) {
+    if (index > 0) {
+      shell_faces << ",";
+    }
+    shell_faces << step.ref(face_ids[index]);
+  }
+
+  const int closed_shell = step.add("CLOSED_SHELL('',(" + shell_faces.str() + "))");
+  const int manifold_solid_brep =
+      step.add("MANIFOLD_SOLID_BREP('mesh2solid'," + step.ref(closed_shell) + ")");
+  const int shape_representation =
+      step.add("ADVANCED_BREP_SHAPE_REPRESENTATION('',(" + step.ref(manifold_solid_brep) + "," +
+               step.ref(context_ids.global_axis) + ")," + step.ref(context_ids.context) + ")");
+  step.add("SHAPE_DEFINITION_REPRESENTATION(" + step.ref(context_ids.product_shape) + "," +
+           step.ref(shape_representation) + ")");
+}
+
+void write_step_builder_to_file(const std::filesystem::path& path, const StepBuilder& step) {
+  std::ofstream output(path);
+  if (!output) {
+    throw std::runtime_error("Unable to write STEP file: " + path.string());
+  }
+  output << step_header();
+  output << step.emit();
+  output << "ENDSEC;\n";
+  output << "END-ISO-10303-21;\n";
 }
 
 int add_step_planar_face_from_loops(StepBuilder& step,

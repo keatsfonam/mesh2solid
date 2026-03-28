@@ -5,21 +5,7 @@ bool write_step_file_generic_cylindrical_features(
   StepBuilder step;
   const StepExportContext context_ids = build_step_export_context(step);
   StepLineLoopWriter writer(step, context_ids, reconstruction);
-
-  std::unordered_map<int, StepPlaneSurface> face_planes;
-  auto get_face_plane = [&](int face_index) -> const StepPlaneSurface& {
-    const auto found = face_planes.find(face_index);
-    if (found != face_planes.end()) {
-      return found->second;
-    }
-
-    const ReconstructedFace& face = reconstruction.faces[face_index];
-    const PlaneBasis basis = basis_from_normal(face.fit.normal);
-    return face_planes
-        .emplace(face_index,
-                 add_step_plane_surface(step, face.fit.centroid, face.fit.normal, basis.u))
-        .first->second;
-  };
+  StepPlaneSurfaceCache plane_cache(step, reconstruction);
 
   struct HoleLoopRef {
     std::size_t hole_index {};
@@ -50,8 +36,8 @@ bool write_step_file_generic_cylindrical_features(
   hole_bundles.reserve(feature_export.holes.size());
   for (std::size_t hole_index = 0; hole_index < feature_export.holes.size(); ++hole_index) {
     const GenericCylindricalThroughHole& hole = feature_export.holes[hole_index];
-    const StepPlaneSurface& top_plane = get_face_plane(hole.top_face_index);
-    const StepPlaneSurface& bottom_plane = get_face_plane(hole.bottom_face_index);
+    const StepPlaneSurface& top_plane = plane_cache.get(hole.top_face_index);
+    const StepPlaneSurface& bottom_plane = plane_cache.get(hole.bottom_face_index);
     hole_bundles.push_back(
         add_step_cylinder_bundle(step, context_ids, hole.cylinder, top_plane, bottom_plane));
     hole_loop_refs.emplace(make_face_loop_key(hole.top_face_index, hole.top_loop_index),
@@ -66,8 +52,8 @@ bool write_step_file_generic_cylindrical_features(
   for (std::size_t feature_index = 0; feature_index < feature_export.blind_features.size();
        ++feature_index) {
     const GenericCylindricalBlindFeature& feature = feature_export.blind_features[feature_index];
-    const StepPlaneSurface& support_plane = get_face_plane(feature.support_face_index);
-    const StepPlaneSurface& cap_plane = get_face_plane(feature.cap_face_index);
+    const StepPlaneSurface& support_plane = plane_cache.get(feature.support_face_index);
+    const StepPlaneSurface& cap_plane = plane_cache.get(feature.cap_face_index);
     const StepPlaneSurface& top_plane = feature.support_is_top ? support_plane : cap_plane;
     const StepPlaneSurface& bottom_plane = feature.support_is_top ? cap_plane : support_plane;
     blind_bundles.push_back(
@@ -120,7 +106,7 @@ bool write_step_file_generic_cylindrical_features(
 
     const ReconstructedFace& face = reconstruction.faces[face_index];
     const int face_index_int = static_cast<int>(face_index);
-    const StepPlaneSurface& plane = get_face_plane(face_index_int);
+    const StepPlaneSurface& plane = plane_cache.get(face_index_int);
     if (special_blind_cap_faces.contains(face_index_int)) {
       const auto cap_ref = blind_cap_face_refs.find(face_index_int);
       if (cap_ref == blind_cap_face_refs.end()) {
@@ -224,29 +210,7 @@ bool write_step_file_generic_cylindrical_features(
     face_ids.push_back(bundle.lateral_face);
   }
 
-  std::ostringstream shell_faces;
-  for (std::size_t index = 0; index < face_ids.size(); ++index) {
-    if (index > 0) {
-      shell_faces << ",";
-    }
-    shell_faces << step.ref(face_ids[index]);
-  }
-  const int closed_shell = step.add("CLOSED_SHELL('',(" + shell_faces.str() + "))");
-  const int manifold_solid_brep =
-      step.add("MANIFOLD_SOLID_BREP('mesh2solid'," + step.ref(closed_shell) + ")");
-  const int shape_representation =
-      step.add("ADVANCED_BREP_SHAPE_REPRESENTATION('',(" + step.ref(manifold_solid_brep) + "," +
-               step.ref(context_ids.global_axis) + ")," + step.ref(context_ids.context) + ")");
-  step.add("SHAPE_DEFINITION_REPRESENTATION(" + step.ref(context_ids.product_shape) + "," +
-           step.ref(shape_representation) + ")");
-
-  std::ofstream output(path);
-  if (!output) {
-    throw std::runtime_error("Unable to write STEP file: " + path.string());
-  }
-  output << step_header();
-  output << step.emit();
-  output << "ENDSEC;\n";
-  output << "END-ISO-10303-21;\n";
+  add_step_manifold_solid_representation(step, context_ids, face_ids);
+  write_step_builder_to_file(path, step);
   return true;
 }

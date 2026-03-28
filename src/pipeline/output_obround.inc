@@ -457,29 +457,10 @@ bool write_step_file_prismatic_profile_sweep_obround_slot_model(
     side_face_ids.push_back(add_step_face_from_single_outer_loop(step, plane, edge_loop));
   }
 
-  std::ostringstream shell_faces;
-  shell_faces << step.ref(top_face) << "," << step.ref(bottom_face) << ","
-              << step.ref(upper_slot_face) << "," << step.ref(lower_slot_face) << ","
-              << step.ref(right_cylinder_face) << "," << step.ref(left_cylinder_face);
-  for (int face_id : side_face_ids) {
-    shell_faces << "," << step.ref(face_id);
-  }
-  const int closed_shell = step.add("CLOSED_SHELL('',(" + shell_faces.str() + "))");
-  const int manifold_solid_brep =
-      step.add("MANIFOLD_SOLID_BREP('mesh2solid'," + step.ref(closed_shell) + ")");
-  const int shape_representation =
-      step.add("ADVANCED_BREP_SHAPE_REPRESENTATION('',(" + step.ref(manifold_solid_brep) + "," +
-               step.ref(context_ids.global_axis) + ")," + step.ref(context_ids.context) + ")");
-  step.add("SHAPE_DEFINITION_REPRESENTATION(" + step.ref(context_ids.product_shape) + "," +
-           step.ref(shape_representation) + ")");
-
-  std::ofstream output(path);
-  if (!output) {
-    throw std::runtime_error("Unable to write STEP file: " + path.string());
-  }
-  output << step_header();
-  output << step.emit();
-  output << "ENDSEC;\n";
-  output << "END-ISO-10303-21;\n";
+  std::vector<int> face_ids {top_face,    bottom_face,   upper_slot_face,
+                             lower_slot_face, right_cylinder_face, left_cylinder_face};
+  face_ids.insert(face_ids.end(), side_face_ids.begin(), side_face_ids.end());
+  add_step_manifold_solid_representation(step, context_ids, face_ids);
+  write_step_builder_to_file(path, step);
   return true;
 }

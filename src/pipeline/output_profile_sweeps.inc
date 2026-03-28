@@ -56,21 +56,7 @@ bool write_step_file_prismatic_profile_sweep_bands(
   StepBuilder step;
   const StepExportContext context_ids = build_step_export_context(step);
   StepLineLoopWriter writer(step, context_ids, reconstruction);
-
-  std::unordered_map<int, StepPlaneSurface> face_planes;
-  auto get_face_plane = [&](int face_index) -> const StepPlaneSurface& {
-    const auto found = face_planes.find(face_index);
-    if (found != face_planes.end()) {
-      return found->second;
-    }
-
-    const ReconstructedFace& face = reconstruction.faces[face_index];
-    const PlaneBasis basis = basis_from_normal(face.fit.normal);
-    return face_planes
-        .emplace(face_index,
-                 add_step_plane_surface(step, face.fit.centroid, face.fit.normal, basis.u))
-        .first->second;
-  };
+  StepPlaneSurfaceCache plane_cache(step, reconstruction);
 
   struct SmoothBandLoopRef {
     std::size_t band_index {};
@@ -106,7 +92,7 @@ bool write_step_file_prismatic_profile_sweep_bands(
 
     const ReconstructedFace& face = reconstruction.faces[face_index];
     const int face_index_int = static_cast<int>(face_index);
-    const StepPlaneSurface& plane = get_face_plane(face_index_int);
+    const StepPlaneSurface& plane = plane_cache.get(face_index_int);
     if (!special_loop_faces.contains(face_index_int)) {
       face_ids.push_back(
           add_step_planar_face_from_loops(step, writer, plane.plane_id, face.loops));
@@ -156,30 +142,8 @@ bool write_step_file_prismatic_profile_sweep_bands(
     face_ids.push_back(bundle.lateral_face);
   }
 
-  std::ostringstream shell_faces;
-  for (std::size_t index = 0; index < face_ids.size(); ++index) {
-    if (index > 0) {
-      shell_faces << ",";
-    }
-    shell_faces << step.ref(face_ids[index]);
-  }
-  const int closed_shell = step.add("CLOSED_SHELL('',(" + shell_faces.str() + "))");
-  const int manifold_solid_brep =
-      step.add("MANIFOLD_SOLID_BREP('mesh2solid'," + step.ref(closed_shell) + ")");
-  const int shape_representation =
-      step.add("ADVANCED_BREP_SHAPE_REPRESENTATION('',(" + step.ref(manifold_solid_brep) + "," +
-               step.ref(context_ids.global_axis) + ")," + step.ref(context_ids.context) + ")");
-  step.add("SHAPE_DEFINITION_REPRESENTATION(" + step.ref(context_ids.product_shape) + "," +
-           step.ref(shape_representation) + ")");
-
-  std::ofstream output(path);
-  if (!output) {
-    throw std::runtime_error("Unable to write STEP file: " + path.string());
-  }
-  output << step_header();
-  output << step.emit();
-  output << "ENDSEC;\n";
-  output << "END-ISO-10303-21;\n";
+  add_step_manifold_solid_representation(step, context_ids, face_ids);
+  write_step_builder_to_file(path, step);
   return true;
 }
 
