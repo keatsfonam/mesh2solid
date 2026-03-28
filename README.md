@@ -230,6 +230,7 @@ Current implementation checkpoint:
 - bosses, repeated bosses, and standoffs now share a canonical support-section model and writer
 - smooth extruded cap-pair side bands now route through a canonical profile-sweep band writer, and mixed cylindrical bodies reuse the same loop-subsequence replacement primitive when analytic sweep edges are stitched back into planar caps
 - obround slots now route through an explicit profile-sweep slot model and share the common synthetic profile-loop STEP helper layer
+- smooth bands and obround slots now share one top-level Phase 3 profile-sweep model dispatch path
 - `src/main.cpp`
   - CLI surface
 - `include/mesh2solid/pipeline.h`

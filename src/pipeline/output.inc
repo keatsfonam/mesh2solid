@@ -7200,9 +7200,9 @@ StepSmoothBandBundle add_step_smooth_band_bundle(StepBuilder& step,
 #include "output_prismatic_sections.inc"
 #include "output_prismatic_blind_sections.inc"
 #include "output_prismatic_support_sections.inc"
+#include "output_obround.inc"
 #include "output_profile_sweeps.inc"
 #include "output_cylindrical.inc"
-#include "output_obround.inc"
 
 #include "output_fallback_step.inc"
 
@@ -7226,13 +7226,6 @@ bool write_step_file(const std::filesystem::path& path,
     return write_step_file_prismatic_blind_section_model(path, reconstruction, *blind_sections);
   }
 
-  if (const std::optional<PrismaticProfileSweepObroundSlotModel> obround_slot =
-          detect_prismatic_profile_sweep_obround_slot_model(reconstruction);
-      obround_slot.has_value()) {
-    return write_step_file_prismatic_profile_sweep_obround_slot_model(
-        path, reconstruction, *obround_slot);
-  }
-
   if (const std::optional<PrismaticSupportSectionModel> support_sections =
           detect_prismatic_support_section_model(reconstruction);
       support_sections.has_value()) {
@@ -7246,12 +7239,13 @@ bool write_step_file(const std::filesystem::path& path,
   const std::optional<GenericSmoothExtrudedBandExport> generic_smooth_bands =
       detect_generic_smooth_extruded_band_export(reconstruction);
 
-  if (!generic_holes.has_value() && !generic_blind_features.has_value()) {
-    if (const std::optional<PrismaticProfileSweepBandExport> profile_sweep_bands =
-            detect_prismatic_profile_sweep_band_export(generic_smooth_bands);
-        profile_sweep_bands.has_value()) {
-      return write_step_file_prismatic_profile_sweep_bands(path, reconstruction, *profile_sweep_bands);
-    }
+  if (const std::optional<PrismaticProfileSweepModel> profile_sweep_model =
+          detect_prismatic_profile_sweep_model(
+              reconstruction,
+              generic_smooth_bands,
+              !generic_holes.has_value() && !generic_blind_features.has_value());
+      profile_sweep_model.has_value()) {
+    return write_step_file_prismatic_profile_sweep_model(path, reconstruction, *profile_sweep_model);
   }
 
   const std::optional<GenericCylindricalFeatureExport> generic_features =

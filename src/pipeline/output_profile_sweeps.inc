@@ -1,3 +1,14 @@
+enum class PrismaticProfileSweepModelKind {
+  SmoothBands,
+  ObroundSlot,
+};
+
+struct PrismaticProfileSweepModel {
+  PrismaticProfileSweepModelKind kind {PrismaticProfileSweepModelKind::SmoothBands};
+  PrismaticProfileSweepBandExport band_export;
+  PrismaticProfileSweepObroundSlotModel obround_slot;
+};
+
 std::optional<PrismaticProfileSweepBandExport> detect_prismatic_profile_sweep_band_export(
     const std::optional<GenericSmoothExtrudedBandExport>& smooth_bands) {
   if (!smooth_bands.has_value() || smooth_bands->bands.empty()) {
@@ -7,6 +18,35 @@ std::optional<PrismaticProfileSweepBandExport> detect_prismatic_profile_sweep_ba
   PrismaticProfileSweepBandExport export_result;
   export_result.bands = smooth_bands->bands;
   return export_result;
+}
+
+std::optional<PrismaticProfileSweepModel> detect_prismatic_profile_sweep_model(
+    const ReconstructionResult& reconstruction,
+    const std::optional<GenericSmoothExtrudedBandExport>& smooth_bands,
+    bool allow_smooth_bands) {
+  if (const std::optional<PrismaticProfileSweepObroundSlotModel> obround_slot =
+          detect_prismatic_profile_sweep_obround_slot_model(reconstruction);
+      obround_slot.has_value()) {
+    PrismaticProfileSweepModel model;
+    model.kind = PrismaticProfileSweepModelKind::ObroundSlot;
+    model.obround_slot = *obround_slot;
+    return model;
+  }
+
+  if (!allow_smooth_bands) {
+    return std::nullopt;
+  }
+
+  if (const std::optional<PrismaticProfileSweepBandExport> band_export =
+          detect_prismatic_profile_sweep_band_export(smooth_bands);
+      band_export.has_value()) {
+    PrismaticProfileSweepModel model;
+    model.kind = PrismaticProfileSweepModelKind::SmoothBands;
+    model.band_export = *band_export;
+    return model;
+  }
+
+  return std::nullopt;
 }
 
 bool write_step_file_prismatic_profile_sweep_bands(
@@ -141,4 +181,19 @@ bool write_step_file_prismatic_profile_sweep_bands(
   output << "ENDSEC;\n";
   output << "END-ISO-10303-21;\n";
   return true;
+}
+
+bool write_step_file_prismatic_profile_sweep_model(
+    const std::filesystem::path& path,
+    const ReconstructionResult& reconstruction,
+    const PrismaticProfileSweepModel& model) {
+  switch (model.kind) {
+    case PrismaticProfileSweepModelKind::SmoothBands:
+      return write_step_file_prismatic_profile_sweep_bands(path, reconstruction, model.band_export);
+    case PrismaticProfileSweepModelKind::ObroundSlot:
+      return write_step_file_prismatic_profile_sweep_obround_slot_model(
+          path, reconstruction, model.obround_slot);
+  }
+
+  return false;
 }

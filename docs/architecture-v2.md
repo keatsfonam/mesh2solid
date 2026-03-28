@@ -194,6 +194,8 @@ Checkpoint:
   layer instead of carrying a fully standalone loop/edge writer
 - obround slots now route through an explicit profile-sweep slot model in
   detection and dispatch instead of a generically named one-off export case
+- smooth bands and obround slots now share a common top-level
+  `PrismaticProfileSweepModel` dispatch path
 
 ### Phase 4: Blend And Revolved Expansion
 
