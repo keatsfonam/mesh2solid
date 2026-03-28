@@ -10,12 +10,14 @@ Fragment layout:
 - `reconstruction.inc`: plane fitting, region constraint handling, loop recovery, shell reconstruction, and gap repair
 - `fallback.inc`: faceted mesh fallback reconstruction for closed repaired meshes
 - `output.inc`: STEP/STL emission and JSON/debug/report serialization orchestration
+- `output_prismatic_types.inc`: shared canonical and legacy prismatic feature/result types used by the section-model adapters and remaining detector fragments
 - `output_cylinder_solids.inc`: analytic cylinder-solid STEP writers
 - `output_step_loop.inc`: shared STEP loop, edge, planar-face, plane-cache, shell-finalization, and synthetic profile-loop helpers for analytic export families
 - `output_axial.inc`: canonical shared-cap axial section-model STEP writer
 - `output_prismatic_sections.inc`: adapters from prismatic bore/counterbore/countersink detections into the canonical axial section model
 - `output_prismatic_blind_sections.inc`: adapters and STEP writer for canonical blind-section prismatic features
 - `output_prismatic_support_sections.inc`: adapters and STEP writer for canonical boss, multi-boss, and standoff support features
+- `output_prismatic_support_detection.inc`: legacy/simple support-feature detectors that feed the canonical support-section model
 - `output_profile_sweeps.inc`: canonical Phase 3 profile-sweep model detection and dispatch for smooth extruded side walls and sweep-derived slot bodies
 - `output_profile_sweep_detection.inc`: smooth-band Phase 3 types and detection helpers shared by the profile-sweep and mixed cylindrical export families
 - `output_cylindrical_detection.inc`: generic cylindrical through-hole, blind-feature, and merge detection shared by the mixed cylindrical export path
