@@ -190,6 +190,8 @@ Checkpoint:
   profile-sweep band writer
 - mixed cylindrical bodies reuse the same loop-subsequence replacement
   primitive when they splice analytic profile-sweep edges into planar caps
+- obround-slot export now shares the common synthetic profile-loop STEP helper
+  layer instead of carrying a fully standalone loop/edge writer
 
 ### Phase 4: Blend And Revolved Expansion
 

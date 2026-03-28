@@ -105,6 +105,107 @@ class StepLineLoopWriter {
   std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_curve_ids;
 };
 
+struct StepSyntheticVertexInfo {
+  int point_id {};
+  int vertex_id {};
+  Vec3 position {};
+};
+
+class StepSyntheticLoopWriter {
+ public:
+  StepSyntheticLoopWriter(StepBuilder& builder, const std::vector<Vec3>& base_vertices)
+      : step(builder) {
+    vertices.reserve(base_vertices.size());
+    for (const Vec3& vertex : base_vertices) {
+      append_vertex(vertex);
+    }
+  }
+
+  int add_vertex(const Vec3& point) {
+    append_vertex(point);
+    return static_cast<int>(vertices.size()) - 1;
+  }
+
+  const Vec3& position(int vertex_index) const { return vertices[vertex_index].position; }
+
+  int point_id(int vertex_index) const { return vertices[vertex_index].point_id; }
+
+  int vertex_id(int vertex_index) const { return vertices[vertex_index].vertex_id; }
+
+  int add_line_edge_curve_id(int from, int to) {
+    const EdgeKey key = make_edge_key(from, to);
+    const auto found = line_edge_curve_ids.find(key);
+    if (found != line_edge_curve_ids.end()) {
+      return found->second;
+    }
+
+    const Vec3 start = vertices[key.a].position;
+    const Vec3 end = vertices[key.b].position;
+    const Vec3 delta = end - start;
+    const double edge_length = length(delta);
+    if (edge_length <= 1e-12) {
+      throw std::runtime_error("Cannot export zero-length STEP edge");
+    }
+
+    const Vec3 direction = normalized(delta);
+    const int direction_id =
+        step.add("DIRECTION('',(" + format_double(direction.x) + "," + format_double(direction.y) +
+                 "," + format_double(direction.z) + "))");
+    const int vector_id = step.add("VECTOR(''," + step.ref(direction_id) + "," +
+                                   format_double(edge_length) + ")");
+    const int line_id = step.add("LINE(''," + step.ref(vertices[key.a].point_id) + "," +
+                                 step.ref(vector_id) + ")");
+    const int edge_curve_id =
+        step.add("EDGE_CURVE(''," + step.ref(vertices[key.a].vertex_id) + "," +
+                 step.ref(vertices[key.b].vertex_id) + "," + step.ref(line_id) + ",.T.)");
+    line_edge_curve_ids.emplace(key, edge_curve_id);
+    return edge_curve_id;
+  }
+
+  int add_oriented_edge(int edge_curve_id, bool same_orientation) {
+    return step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
+                    std::string(same_orientation ? ".T." : ".F.") + ")");
+  }
+
+  int add_line_loop(const std::vector<int>& loop) {
+    std::ostringstream edge_refs;
+    for (std::size_t index = 0; index < loop.size(); ++index) {
+      const int from = loop[index];
+      const int to = loop[(index + 1) % loop.size()];
+      const int edge_curve_id = add_line_edge_curve_id(from, to);
+      const EdgeKey key = make_edge_key(from, to);
+      if (index > 0) {
+        edge_refs << ",";
+      }
+      edge_refs << step.ref(add_oriented_edge(edge_curve_id, key.a == from && key.b == to));
+    }
+    return step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
+  }
+
+  int add_edge_loop(const std::vector<std::pair<int, bool>>& edges) {
+    std::ostringstream edge_refs;
+    for (std::size_t index = 0; index < edges.size(); ++index) {
+      if (index > 0) {
+        edge_refs << ",";
+      }
+      edge_refs << step.ref(add_oriented_edge(edges[index].first, edges[index].second));
+    }
+    return step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
+  }
+
+ private:
+  void append_vertex(const Vec3& point) {
+    const int point_id = step.add("CARTESIAN_POINT('',(" + format_double(point.x) + "," +
+                                  format_double(point.y) + "," + format_double(point.z) + "))");
+    const int vertex_id = step.add("VERTEX_POINT(''," + step.ref(point_id) + ")");
+    vertices.push_back({point_id, vertex_id, point});
+  }
+
+  StepBuilder& step;
+  std::vector<StepSyntheticVertexInfo> vertices;
+  std::unordered_map<EdgeKey, int, EdgeKeyHash> line_edge_curve_ids;
+};
+
 struct StepLoopCurveReplacement {
   LoopSubsequenceMatch match;
   int edge_curve_id {};
@@ -207,6 +308,15 @@ int add_step_planar_face_from_edge_loops(StepBuilder& step,
     bound_refs << step.ref(bound_ids[index]);
   }
   return step.add("ADVANCED_FACE('',(" + bound_refs.str() + ")," + step.ref(plane_id) + "," +
+                  std::string(same_sense ? ".T." : ".F.") + ")");
+}
+
+int add_step_face_from_single_outer_loop(StepBuilder& step,
+                                         int surface_id,
+                                         int edge_loop_id,
+                                         bool same_sense = true) {
+  const int bound_id = step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop_id) + ",.T.)");
+  return step.add("ADVANCED_FACE('',(" + step.ref(bound_id) + ")," + step.ref(surface_id) + "," +
                   std::string(same_sense ? ".T." : ".F.") + ")");
 }
 

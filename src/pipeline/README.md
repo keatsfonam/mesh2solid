@@ -11,7 +11,7 @@ Fragment layout:
 - `fallback.inc`: faceted mesh fallback reconstruction for closed repaired meshes
 - `output.inc`: STEP/STL emission and JSON/debug/report serialization orchestration
 - `output_cylinder_solids.inc`: analytic cylinder-solid STEP writers
-- `output_step_loop.inc`: shared STEP loop, edge, and planar-face writing helpers for analytic export families
+- `output_step_loop.inc`: shared STEP loop, edge, planar-face, and synthetic profile-loop writing helpers for analytic export families
 - `output_axial.inc`: canonical shared-cap axial section-model STEP writer
 - `output_prismatic_sections.inc`: adapters from prismatic bore/counterbore/countersink detections into the canonical axial section model
 - `output_prismatic_blind_sections.inc`: adapters and STEP writer for canonical blind-section prismatic features

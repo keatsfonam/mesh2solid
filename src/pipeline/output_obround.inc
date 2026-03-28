@@ -4,90 +4,7 @@ bool write_step_file_prismatic_obround_slot(const std::filesystem::path& path,
   StepBuilder step;
   const StepExportContext context_ids = build_step_export_context(step);
 
-  struct StepVertexInfo {
-    int point_id {};
-    int vertex_id {};
-    Vec3 position {};
-  };
-
-  std::vector<StepVertexInfo> vertices;
-  vertices.reserve(reconstruction.vertices.size() + 8);
-  for (const Vec3& vertex : reconstruction.vertices) {
-    const int point_id = step.add("CARTESIAN_POINT('',(" + format_double(vertex.x) + "," +
-                                  format_double(vertex.y) + "," + format_double(vertex.z) + "))");
-    const int vertex_id = step.add("VERTEX_POINT(''," + step.ref(point_id) + ")");
-    vertices.push_back({point_id, vertex_id, vertex});
-  }
-
-  auto add_vertex = [&](const Vec3& point) -> int {
-    const int point_id = step.add("CARTESIAN_POINT('',(" + format_double(point.x) + "," +
-                                  format_double(point.y) + "," + format_double(point.z) + "))");
-    const int vertex_id = step.add("VERTEX_POINT(''," + step.ref(point_id) + ")");
-    vertices.push_back({point_id, vertex_id, point});
-    return static_cast<int>(vertices.size() - 1);
-  };
-
-  std::unordered_map<EdgeKey, int, EdgeKeyHash> line_edge_curve_ids;
-  auto get_line_edge_curve_id = [&](int from, int to) -> int {
-    const EdgeKey key = make_edge_key(from, to);
-    const auto found = line_edge_curve_ids.find(key);
-    if (found != line_edge_curve_ids.end()) {
-      return found->second;
-    }
-
-    const Vec3 start = vertices[key.a].position;
-    const Vec3 end = vertices[key.b].position;
-    const Vec3 delta = end - start;
-    const double edge_length = length(delta);
-    if (edge_length <= 1e-12) {
-      throw std::runtime_error("Cannot export zero-length STEP edge");
-    }
-
-    const Vec3 direction = normalized(delta);
-    const int direction_id =
-        step.add("DIRECTION('',(" + format_double(direction.x) + "," + format_double(direction.y) +
-                 "," + format_double(direction.z) + "))");
-    const int vector_id = step.add("VECTOR(''," + step.ref(direction_id) + "," +
-                                   format_double(edge_length) + ")");
-    const int line_id =
-        step.add("LINE(''," + step.ref(vertices[key.a].point_id) + "," + step.ref(vector_id) + ")");
-    const int edge_curve_id =
-        step.add("EDGE_CURVE(''," + step.ref(vertices[key.a].vertex_id) + "," +
-                 step.ref(vertices[key.b].vertex_id) + "," + step.ref(line_id) + ",.T.)");
-    line_edge_curve_ids.emplace(key, edge_curve_id);
-    return edge_curve_id;
-  };
-
-  auto add_oriented_edge = [&](int edge_curve_id, bool same_orientation) -> int {
-    return step.add("ORIENTED_EDGE('',*,*," + step.ref(edge_curve_id) + "," +
-                    std::string(same_orientation ? ".T." : ".F.") + ")");
-  };
-
-  auto add_line_loop = [&](const std::vector<int>& loop) -> int {
-    std::ostringstream edge_refs;
-    for (std::size_t index = 0; index < loop.size(); ++index) {
-      const int from = loop[index];
-      const int to = loop[(index + 1) % loop.size()];
-      const int edge_curve_id = get_line_edge_curve_id(from, to);
-      const EdgeKey key = make_edge_key(from, to);
-      if (index > 0) {
-        edge_refs << ",";
-      }
-      edge_refs << step.ref(add_oriented_edge(edge_curve_id, key.a == from && key.b == to));
-    }
-    return step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
-  };
-
-  auto add_edge_loop = [&](const std::vector<std::pair<int, bool>>& edges) -> int {
-    std::ostringstream edge_refs;
-    for (std::size_t index = 0; index < edges.size(); ++index) {
-      if (index > 0) {
-        edge_refs << ",";
-      }
-      edge_refs << step.ref(add_oriented_edge(edges[index].first, edges[index].second));
-    }
-    return step.add("EDGE_LOOP('',(" + edge_refs.str() + "))");
-  };
+  StepSyntheticLoopWriter writer(step, reconstruction.vertices);
 
   auto wrap_angle = [](double angle) {
     while (angle < 0.0) {
@@ -113,8 +30,8 @@ bool write_step_file_prismatic_obround_slot(const std::filesystem::path& path,
       return wrap_angle(std::atan2(dot(delta, local_v), dot(delta, local_ref)));
     };
 
-    const double start_angle = angle_at(vertices[from].position);
-    const double end_angle = angle_at(vertices[to].position);
+    const double start_angle = angle_at(writer.position(from));
+    const double end_angle = angle_at(writer.position(to));
     double midpoint_angle = angle_at(midpoint);
     double ccw_end = end_angle;
     if (ccw_end < start_angle) {
@@ -138,11 +55,11 @@ bool write_step_file_prismatic_obround_slot(const std::filesystem::path& path,
     const int circle =
         step.add("CIRCLE(''," + step.ref(circle_axis) + "," + format_double(radius) + ")");
     const int trimmed =
-        step.add("TRIMMED_CURVE(''," + step.ref(circle) + ",(" + step.ref(vertices[from].point_id) +
-                 "),(" + step.ref(vertices[to].point_id) + ")," +
+        step.add("TRIMMED_CURVE(''," + step.ref(circle) + ",(" + step.ref(writer.point_id(from)) +
+                 "),(" + step.ref(writer.point_id(to)) + ")," +
                  std::string(sense_agreement ? ".T." : ".F.") + ",.CARTESIAN.)");
-    return step.add("EDGE_CURVE(''," + step.ref(vertices[from].vertex_id) + "," +
-                    step.ref(vertices[to].vertex_id) + "," + step.ref(trimmed) + ",.T.)");
+    return step.add("EDGE_CURVE(''," + step.ref(writer.vertex_id(from)) + "," +
+                    step.ref(writer.vertex_id(to)) + "," + step.ref(trimmed) + ",.T.)");
   };
 
   auto add_plane = [&](const Vec3& origin, const Vec3& normal, const Vec3& ref_direction) -> int {
@@ -193,23 +110,23 @@ bool write_step_file_prismatic_obround_slot(const std::filesystem::path& path,
   const Vec3 bottom_right_center = bottom_center + slot.major_direction * slot.half_span;
   const Vec3 bottom_left_center = bottom_center - slot.major_direction * slot.half_span;
 
-  const int top_tl = add_vertex(top_left_center + slot.minor_direction * slot.radius);
-  const int top_tr = add_vertex(top_right_center + slot.minor_direction * slot.radius);
-  const int top_br = add_vertex(top_right_center - slot.minor_direction * slot.radius);
-  const int top_bl = add_vertex(top_left_center - slot.minor_direction * slot.radius);
-  const int bottom_tl = add_vertex(bottom_left_center + slot.minor_direction * slot.radius);
-  const int bottom_tr = add_vertex(bottom_right_center + slot.minor_direction * slot.radius);
-  const int bottom_br = add_vertex(bottom_right_center - slot.minor_direction * slot.radius);
-  const int bottom_bl = add_vertex(bottom_left_center - slot.minor_direction * slot.radius);
+  const int top_tl = writer.add_vertex(top_left_center + slot.minor_direction * slot.radius);
+  const int top_tr = writer.add_vertex(top_right_center + slot.minor_direction * slot.radius);
+  const int top_br = writer.add_vertex(top_right_center - slot.minor_direction * slot.radius);
+  const int top_bl = writer.add_vertex(top_left_center - slot.minor_direction * slot.radius);
+  const int bottom_tl = writer.add_vertex(bottom_left_center + slot.minor_direction * slot.radius);
+  const int bottom_tr = writer.add_vertex(bottom_right_center + slot.minor_direction * slot.radius);
+  const int bottom_br = writer.add_vertex(bottom_right_center - slot.minor_direction * slot.radius);
+  const int bottom_bl = writer.add_vertex(bottom_left_center - slot.minor_direction * slot.radius);
 
-  const int top_upper_line = get_line_edge_curve_id(top_tl, top_tr);
-  const int top_lower_line = get_line_edge_curve_id(top_br, top_bl);
-  const int bottom_upper_line = get_line_edge_curve_id(bottom_tl, bottom_tr);
-  const int bottom_lower_line = get_line_edge_curve_id(bottom_br, bottom_bl);
-  const int seam_tl = get_line_edge_curve_id(bottom_tl, top_tl);
-  const int seam_tr = get_line_edge_curve_id(bottom_tr, top_tr);
-  const int seam_br = get_line_edge_curve_id(bottom_br, top_br);
-  const int seam_bl = get_line_edge_curve_id(bottom_bl, top_bl);
+  const int top_upper_line = writer.add_line_edge_curve_id(top_tl, top_tr);
+  const int top_lower_line = writer.add_line_edge_curve_id(top_br, top_bl);
+  const int bottom_upper_line = writer.add_line_edge_curve_id(bottom_tl, bottom_tr);
+  const int bottom_lower_line = writer.add_line_edge_curve_id(bottom_br, bottom_bl);
+  const int seam_tl = writer.add_line_edge_curve_id(bottom_tl, top_tl);
+  const int seam_tr = writer.add_line_edge_curve_id(bottom_tr, top_tr);
+  const int seam_br = writer.add_line_edge_curve_id(bottom_br, top_br);
+  const int seam_bl = writer.add_line_edge_curve_id(bottom_bl, top_bl);
 
   const int top_right_arc = add_arc_edge_curve(
       top_tr,
@@ -282,52 +199,35 @@ bool write_step_file_prismatic_obround_slot(const std::filesystem::path& path,
       {bottom_right_arc, false},
   };
 
-  const int top_outer_loop_id = add_line_loop(top_outer_loop);
-  const int top_outer_bound = step.add("FACE_OUTER_BOUND(''," + step.ref(top_outer_loop_id) + ",.T.)");
+  const int top_outer_loop_id = writer.add_line_loop(top_outer_loop);
   const int top_inner_loop_id =
-      add_edge_loop(slot.top_inner_area < 0.0 ? top_hole_cw : top_hole_ccw);
-  const int top_inner_bound = step.add("FACE_BOUND(''," + step.ref(top_inner_loop_id) + ",.T.)");
-  const int top_face = step.add("ADVANCED_FACE('',(" + step.ref(top_outer_bound) + "," +
-                                step.ref(top_inner_bound) + ")," + step.ref(top_plane) + ",.T.)");
+      writer.add_edge_loop(slot.top_inner_area < 0.0 ? top_hole_cw : top_hole_ccw);
+  const int top_face = add_step_planar_face_from_edge_loops(
+      step, top_plane, std::vector<int> {top_outer_loop_id, top_inner_loop_id});
 
-  const int bottom_outer_loop_id = add_line_loop(bottom_outer_loop);
-  const int bottom_outer_bound =
-      step.add("FACE_OUTER_BOUND(''," + step.ref(bottom_outer_loop_id) + ",.T.)");
+  const int bottom_outer_loop_id = writer.add_line_loop(bottom_outer_loop);
   const int bottom_inner_loop_id =
-      add_edge_loop(slot.bottom_inner_area < 0.0 ? bottom_hole_cw : bottom_hole_ccw);
-  const int bottom_inner_bound =
-      step.add("FACE_BOUND(''," + step.ref(bottom_inner_loop_id) + ",.T.)");
-  const int bottom_face = step.add("ADVANCED_FACE('',(" + step.ref(bottom_outer_bound) + "," +
-                                   step.ref(bottom_inner_bound) + ")," +
-                                   step.ref(bottom_plane) + ",.F.)");
+      writer.add_edge_loop(slot.bottom_inner_area < 0.0 ? bottom_hole_cw : bottom_hole_ccw);
+  const int bottom_face = add_step_planar_face_from_edge_loops(
+      step, bottom_plane, std::vector<int> {bottom_outer_loop_id, bottom_inner_loop_id}, 0, false);
 
-  const int upper_slot_loop = add_line_loop({bottom_tl, bottom_tr, top_tr, top_tl});
-  const int upper_slot_bound =
-      step.add("FACE_OUTER_BOUND(''," + step.ref(upper_slot_loop) + ",.T.)");
-  const int upper_slot_face = step.add("ADVANCED_FACE('',(" + step.ref(upper_slot_bound) + ")," +
-                                       step.ref(upper_slot_plane) + ",.T.)");
+  const int upper_slot_loop = writer.add_line_loop({bottom_tl, bottom_tr, top_tr, top_tl});
+  const int upper_slot_face =
+      add_step_face_from_single_outer_loop(step, upper_slot_plane, upper_slot_loop);
 
-  const int lower_slot_loop = add_line_loop({bottom_br, bottom_bl, top_bl, top_br});
-  const int lower_slot_bound =
-      step.add("FACE_OUTER_BOUND(''," + step.ref(lower_slot_loop) + ",.T.)");
-  const int lower_slot_face = step.add("ADVANCED_FACE('',(" + step.ref(lower_slot_bound) + ")," +
-                                       step.ref(lower_slot_plane) + ",.T.)");
+  const int lower_slot_loop = writer.add_line_loop({bottom_br, bottom_bl, top_bl, top_br});
+  const int lower_slot_face =
+      add_step_face_from_single_outer_loop(step, lower_slot_plane, lower_slot_loop);
 
-  const int right_cylinder_loop = add_edge_loop(
+  const int right_cylinder_loop = writer.add_edge_loop(
       {{top_right_arc, true}, {seam_br, false}, {bottom_right_arc, false}, {seam_tr, true}});
-  const int right_cylinder_bound =
-      step.add("FACE_OUTER_BOUND(''," + step.ref(right_cylinder_loop) + ",.T.)");
   const int right_cylinder_face =
-      step.add("ADVANCED_FACE('',(" + step.ref(right_cylinder_bound) + ")," +
-               step.ref(right_cylinder) + ",.T.)");
+      add_step_face_from_single_outer_loop(step, right_cylinder, right_cylinder_loop);
 
-  const int left_cylinder_loop = add_edge_loop(
+  const int left_cylinder_loop = writer.add_edge_loop(
       {{top_left_arc, true}, {seam_tl, false}, {bottom_left_arc, false}, {seam_bl, true}});
-  const int left_cylinder_bound =
-      step.add("FACE_OUTER_BOUND(''," + step.ref(left_cylinder_loop) + ",.T.)");
   const int left_cylinder_face =
-      step.add("ADVANCED_FACE('',(" + step.ref(left_cylinder_bound) + ")," +
-               step.ref(left_cylinder) + ",.T.)");
+      add_step_face_from_single_outer_loop(step, left_cylinder, left_cylinder_loop);
 
   std::vector<int> side_face_ids;
   side_face_ids.reserve(slot.outer_face_indices.size());
@@ -345,10 +245,8 @@ bool write_step_file_prismatic_obround_slot(const std::filesystem::path& path,
     const int axis = step.add("AXIS2_PLACEMENT_3D(''," + step.ref(plane_origin) + "," +
                               step.ref(face_normal) + "," + step.ref(face_ref) + ")");
     const int plane = step.add("PLANE(''," + step.ref(axis) + ")");
-    const int edge_loop = add_line_loop(face.loops.front());
-    const int bound = step.add("FACE_OUTER_BOUND(''," + step.ref(edge_loop) + ",.T.)");
-    side_face_ids.push_back(
-        step.add("ADVANCED_FACE('',(" + step.ref(bound) + ")," + step.ref(plane) + ",.T.)"));
+    const int edge_loop = writer.add_line_loop(face.loops.front());
+    side_face_ids.push_back(add_step_face_from_single_outer_loop(step, plane, edge_loop));
   }
 
   std::ostringstream shell_faces;
