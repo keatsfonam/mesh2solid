@@ -17,6 +17,8 @@ Fragment layout:
 - `output_prismatic_sections.inc`: adapters from prismatic bore/counterbore/countersink detections into the canonical axial section model
 - `output_prismatic_blind_sections.inc`: adapters and STEP writer for canonical blind-section prismatic features
 - `output_prismatic_support_sections.inc`: adapters and STEP writer for canonical boss, multi-boss, and standoff support features
+- `output_prismatic_blind_detection.inc`: remaining simple/legacy blind-feature detectors that feed the canonical blind-section model
+- `output_prismatic_axial_detection.inc`: remaining simple/legacy through-feature detectors and axial-cap analysis helpers that feed the canonical shared-cap section model
 - `output_prismatic_support_detection.inc`: legacy/simple support-feature detectors that feed the canonical support-section model
 - `output_profile_sweeps.inc`: canonical Phase 3 profile-sweep model detection and dispatch for smooth extruded side walls and sweep-derived slot bodies
 - `output_profile_sweep_detection.inc`: smooth-band Phase 3 types and detection helpers shared by the profile-sweep and mixed cylindrical export families
