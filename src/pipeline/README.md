@@ -17,6 +17,7 @@ Fragment layout:
 - `output_prismatic_blind_sections.inc`: adapters and STEP writer for canonical blind-section prismatic features
 - `output_prismatic_support_sections.inc`: adapters and STEP writer for canonical boss, multi-boss, and standoff support features
 - `output_profile_sweeps.inc`: canonical Phase 3 profile-sweep model detection and dispatch for smooth extruded side walls and sweep-derived slot bodies
+- `output_profile_sweep_detection.inc`: smooth-band Phase 3 types and detection helpers shared by the profile-sweep and mixed cylindrical export families
 - `output_cylindrical.inc`: mixed cylindrical-feature STEP writers
 - `output_obround.inc`: obround-slot profile-sweep model detection and writer
 - `output_fallback_step.inc`: generic planar STEP fallback writer used when no analytic export family matches
