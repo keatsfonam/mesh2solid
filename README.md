@@ -226,6 +226,7 @@ MESH2SOLID_BIN=/path/to/mesh2solid MESH2SOLID_SKIP_BUILD=1 python3 benchmarks/ru
 Current implementation checkpoint:
 - the shared-cap prismatic through-feature family now routes through a canonical axial section model
 - single bores, repeated bores, countersinks, counterbores, and mixed shared-cap through features share one analytic writer
+- blind bores, blind counterbores, blind countersinks, and their repeated variants now share a canonical blind-section model and writer
 - `src/main.cpp`
   - CLI surface
 - `include/mesh2solid/pipeline.h`

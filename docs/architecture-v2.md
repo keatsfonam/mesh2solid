@@ -172,6 +172,13 @@ Apply the same modeling idea to:
 - repeated bosses
 - standoffs
 
+Checkpoint:
+
+- blind bores, blind counterbores, blind countersinks, and their repeated
+  variants are now routed through one canonical blind-section model
+- bosses, repeated bosses, and standoffs still remain as the next additive
+  counterpart to fold into the same family
+
 ### Phase 3: Profile-Derived Side Walls
 
 Move extruded profile bands, obround slots, and fillet-like extruded arcs onto

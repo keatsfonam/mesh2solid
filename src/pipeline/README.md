@@ -11,11 +11,11 @@ Fragment layout:
 - `fallback.inc`: faceted mesh fallback reconstruction for closed repaired meshes
 - `output.inc`: STEP/STL emission and JSON/debug/report serialization orchestration
 - `output_cylinder_solids.inc`: analytic cylinder-solid STEP writers
-- `output_blind_features.inc`: blind bore/counterbore/countersink STEP writers, including repeated blind-feature variants
 - `output_supports.inc`: boss, multi-boss, and standoff STEP writers
 - `output_step_loop.inc`: shared STEP loop, edge, and planar-face writing helpers for analytic export families
 - `output_axial.inc`: canonical shared-cap axial section-model STEP writer
 - `output_prismatic_sections.inc`: adapters from prismatic bore/counterbore/countersink detections into the canonical axial section model
+- `output_prismatic_blind_sections.inc`: adapters and STEP writer for canonical blind-section prismatic features
 - `output_cylindrical.inc`: mixed cylindrical-feature STEP writers
 - `output_obround.inc`: obround-slot STEP writer
 - `output_fallback_step.inc`: generic planar STEP fallback writer used when no analytic export family matches

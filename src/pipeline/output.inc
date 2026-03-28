@@ -442,6 +442,15 @@ struct SimplePrismaticAxialThroughFeatureExport {
 using PrismaticAxialSectionColumn = SimplePrismaticAxialThroughFeature;
 using PrismaticAxialSectionModel = SimplePrismaticAxialThroughFeatureExport;
 
+struct PrismaticBlindSectionModel {
+  int top_face_index {};
+  int support_bottom_face_index {-1};
+  std::vector<int> top_outer_loop;
+  std::vector<int> support_bottom_outer_loop;
+  std::vector<PrismaticAxialSectionColumn> features;
+  std::vector<int> outer_face_indices;
+};
+
 struct SimplePrismaticBossExport {
   int base_face_index {};
   int top_face_index {};
@@ -7368,13 +7377,12 @@ StepSmoothBandBundle add_step_smooth_band_bundle(StepBuilder& step,
 
 #include "output_cylinder_solids.inc"
 
-#include "output_blind_features.inc"
-
 #include "output_supports.inc"
 
 #include "output_step_loop.inc"
 #include "output_axial.inc"
 #include "output_prismatic_sections.inc"
+#include "output_prismatic_blind_sections.inc"
 #include "output_cylindrical.inc"
 #include "output_obround.inc"
 
@@ -7394,40 +7402,10 @@ bool write_step_file(const std::filesystem::path& path,
     return write_step_file_simple_cylinders(path, *cylinders);
   }
 
-  if (const std::optional<SimplePrismaticBlindBoreExport> blind_bore =
-          detect_simple_prismatic_blind_bore_export(reconstruction);
-      blind_bore.has_value()) {
-    return write_step_file_prismatic_blind_bore(path, reconstruction, *blind_bore);
-  }
-
-  if (const std::optional<SimplePrismaticMultiBlindCounterboreExport> multi_blind_counterbore =
-          detect_simple_prismatic_multi_blind_counterbore_export(reconstruction);
-      multi_blind_counterbore.has_value()) {
-    return write_step_file_prismatic_multi_blind_counterbore(path, reconstruction, *multi_blind_counterbore);
-  }
-
-  if (const std::optional<SimplePrismaticMultiBlindCountersinkExport> multi_blind_countersink =
-          detect_simple_prismatic_multi_blind_countersink_export(reconstruction);
-      multi_blind_countersink.has_value()) {
-    return write_step_file_prismatic_multi_blind_countersink(path, reconstruction, *multi_blind_countersink);
-  }
-
-  if (const std::optional<SimplePrismaticMultiBlindBoreExport> multi_blind_bore =
-          detect_simple_prismatic_multi_blind_bore_export(reconstruction);
-      multi_blind_bore.has_value()) {
-    return write_step_file_prismatic_multi_blind_bore(path, reconstruction, *multi_blind_bore);
-  }
-
-  if (const std::optional<SimplePrismaticBlindCounterboreExport> blind_counterbore =
-          detect_simple_prismatic_blind_counterbore_export(reconstruction);
-      blind_counterbore.has_value()) {
-    return write_step_file_prismatic_blind_counterbore(path, reconstruction, *blind_counterbore);
-  }
-
-  if (const std::optional<SimplePrismaticBlindCountersinkExport> blind_countersink =
-          detect_simple_prismatic_blind_countersink_export(reconstruction);
-      blind_countersink.has_value()) {
-    return write_step_file_prismatic_blind_countersink(path, reconstruction, *blind_countersink);
+  if (const std::optional<PrismaticBlindSectionModel> blind_sections =
+          detect_prismatic_blind_section_model(reconstruction);
+      blind_sections.has_value()) {
+    return write_step_file_prismatic_blind_section_model(path, reconstruction, *blind_sections);
   }
 
   if (const std::optional<SimplePrismaticStandoffExport> standoff =
