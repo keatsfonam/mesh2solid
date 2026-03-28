@@ -20,6 +20,7 @@ Fragment layout:
 - `output_profile_sweep_detection.inc`: smooth-band Phase 3 types and detection helpers shared by the profile-sweep and mixed cylindrical export families
 - `output_cylindrical_detection.inc`: generic cylindrical through-hole, blind-feature, and merge detection shared by the mixed cylindrical export path
 - `output_step_types.inc`: shared STEP builder, export-context, surface-bundle, and face-bundle types used across analytic export families
+- `output_step_helpers.inc`: shared STEP spline, export-context, and plane-surface helper functions used across analytic export families
 - `output_cylindrical.inc`: mixed cylindrical-feature STEP writers
 - `output_obround.inc`: obround-slot profile-sweep model detection and writer
 - `output_fallback_step.inc`: generic planar STEP fallback writer used when no analytic export family matches
