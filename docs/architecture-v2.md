@@ -176,8 +176,8 @@ Checkpoint:
 
 - blind bores, blind counterbores, blind countersinks, and their repeated
   variants are now routed through one canonical blind-section model
-- bosses, repeated bosses, and standoffs still remain as the next additive
-  counterpart to fold into the same family
+- bosses, repeated bosses, and standoffs are now routed through one canonical
+  support-section model
 
 ### Phase 3: Profile-Derived Side Walls
 

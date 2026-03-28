@@ -491,6 +491,25 @@ struct SimplePrismaticStandoffExport {
   std::vector<int> outer_face_indices;
 };
 
+struct PrismaticSupportSectionColumn {
+  double base_inner_area {};
+  double top_outer_area {};
+  double top_inner_area {};
+  double bottom_inner_area {};
+  SimpleCylinderPrimitive outer_cylinder {};
+  bool has_inner_cylinder {};
+  SimpleCylinderPrimitive inner_cylinder {};
+};
+
+struct PrismaticSupportSectionModel {
+  int base_face_index {};
+  int support_bottom_face_index {-1};
+  std::vector<int> base_outer_loop;
+  std::vector<int> support_bottom_outer_loop;
+  std::vector<PrismaticSupportSectionColumn> features;
+  std::vector<int> outer_face_indices;
+};
+
 struct SimplePrismaticObroundSlotExport {
   int top_face_index {};
   int bottom_face_index {};
@@ -7377,12 +7396,11 @@ StepSmoothBandBundle add_step_smooth_band_bundle(StepBuilder& step,
 
 #include "output_cylinder_solids.inc"
 
-#include "output_supports.inc"
-
 #include "output_step_loop.inc"
 #include "output_axial.inc"
 #include "output_prismatic_sections.inc"
 #include "output_prismatic_blind_sections.inc"
+#include "output_prismatic_support_sections.inc"
 #include "output_cylindrical.inc"
 #include "output_obround.inc"
 
@@ -7408,28 +7426,16 @@ bool write_step_file(const std::filesystem::path& path,
     return write_step_file_prismatic_blind_section_model(path, reconstruction, *blind_sections);
   }
 
-  if (const std::optional<SimplePrismaticStandoffExport> standoff =
-          detect_simple_prismatic_standoff_export(reconstruction);
-      standoff.has_value()) {
-    return write_step_file_prismatic_standoff(path, reconstruction, *standoff);
-  }
-
   if (const std::optional<SimplePrismaticObroundSlotExport> obround_slot =
           detect_simple_prismatic_obround_slot_export(reconstruction);
       obround_slot.has_value()) {
     return write_step_file_prismatic_obround_slot(path, reconstruction, *obround_slot);
   }
 
-  if (const std::optional<SimplePrismaticMultiBossExport> multi_boss =
-          detect_simple_prismatic_multi_boss_export(reconstruction);
-      multi_boss.has_value()) {
-    return write_step_file_prismatic_multi_boss(path, reconstruction, *multi_boss);
-  }
-
-  if (const std::optional<SimplePrismaticBossExport> boss =
-          detect_simple_prismatic_boss_export(reconstruction);
-      boss.has_value()) {
-    return write_step_file_prismatic_boss(path, reconstruction, *boss);
+  if (const std::optional<PrismaticSupportSectionModel> support_sections =
+          detect_prismatic_support_section_model(reconstruction);
+      support_sections.has_value()) {
+    return write_step_file_prismatic_support_section_model(path, reconstruction, *support_sections);
   }
 
   const std::optional<GenericCylindricalFeatureExport> generic_features =
